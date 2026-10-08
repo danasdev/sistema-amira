@@ -31,6 +31,10 @@ rules_version = '2';
 //  do balcao fisico, sem login — ver admin/avaliacoes-loja.html). Ao
 //  reconciliar uma copia trazida de la, sempre comparar campo por campo
 //  com o que ja existe aqui antes de aceitar — nao é só "pegar tudo".
+//
+//  2026-10-08: `configuracoes/sistema` e `/indicadores` deixaram de ser
+//  publicos (so staff le). Mesma mudanca copiada para o repo do site, que
+//  agora guarda uma copia IDENTICA deste arquivo.
 // =============================================================================
 
 service cloud.firestore {
@@ -270,9 +274,16 @@ service cloud.firestore {
     // Textos e ajustes globais da loja (ex: mínimo de atacado por
     // carrinho, dados de pagamento PIX, imagens do carrossel da home) E
     // config do sistema interno (configuracoes/sistema, /indicadores).
-    // Públicos para leitura, só admin edita.
+    // Os da loja são públicos para leitura (a vitrine lê sem login). Os do
+    // sistema interno NÃO: `sistema` tem CNPJ, comissão e formas de
+    // pagamento, `indicadores` o percentual pago aos divulgadores — antes
+    // qualquer pessoa lia pela API pública. Só a equipe (admin + vendedor
+    // ativo) lê esses dois; no sistema interno toda página que os lê passa
+    // antes por requireAuth(). Só admin edita qualquer um.
+    // ⚠️ Por isso a coleção não pode ser LISTADA sem login (a regra vale
+    // por documento) — o site só lê documentos pelo id.
     match /configuracoes/{docId} {
-      allow read: if true;
+      allow read: if !(docId in ['sistema', 'indicadores']) || ehStaff();
       allow write: if ehAdmin();
     }
 

@@ -89,6 +89,30 @@
         { "fieldPath": "aberto_por_uid", "order": "ASCENDING" },
         { "fieldPath": "aberto_em", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "produtos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "filtros.origem", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "criadoEm", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "produtos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "filtros.genero", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "criadoEm", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "produtos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "filtros.propocao", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "criadoEm", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
