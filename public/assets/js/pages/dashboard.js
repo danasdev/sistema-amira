@@ -5,7 +5,7 @@ import {
   inicioDoDia, inicioDoMes, periodoParaIntervalo, getConfigIndicadores,
 } from "../db.js";
 import { brl, round2 } from "../money.js";
-import { baseElegivelIndicador, contaComoPago } from "../produtos-schema.js";
+import { baseElegivelIndicador, baseElegivelIndicadorVenda, contaComoPago } from "../produtos-schema.js";
 import { mapaDoCatalogo } from "../catalogo-cache.js";
 import { listarCamadas, camadaPrincipal } from "../camadas.js";
 
@@ -213,13 +213,19 @@ async function carregarContabilidade(periodo) {
     const excluirSlugs = cfgInd.categorias_excluidas || [];
     const pedidosSnap = await getDocs(query(collection(db, "pedidos"), where("criadoEm", ">=", ini), where("criadoEm", "<", f)));
     const pedidosDeIndicador = pedidosSnap.docs.map((d) => d.data()).filter((p) => p.ref && contaComoPago(p.status));
+    // Vendas do PDV com indicador escolhido no balcao — ja estao em
+    // vendasLoja (concluidas do mes), sem leitura extra.
+    const vendasLojaDeIndicador = vendasLoja.filter((v) => v.ref);
     let baseIndicadores = 0;
     // Catalogo (cache da aba) e camadas so quando ha o que apurar.
-    if (pedidosDeIndicador.length) {
+    if (pedidosDeIndicador.length || vendasLojaDeIndicador.length) {
       const [produtosMap, camadas] = await Promise.all([mapaDoCatalogo(), listarCamadas()]);
-      const camadaPrincipalSlug = camadaPrincipal(camadas)?.slug || null;
+      const opcoesBase = { camadaPrincipalSlug: camadaPrincipal(camadas)?.slug || null, excluirSlugs };
       pedidosDeIndicador.forEach((p) => {
-        baseIndicadores = round2(baseIndicadores + baseElegivelIndicador(p, produtosMap, { camadaPrincipalSlug, excluirSlugs }).base);
+        baseIndicadores = round2(baseIndicadores + baseElegivelIndicador(p, produtosMap, opcoesBase).base);
+      });
+      vendasLojaDeIndicador.forEach((v) => {
+        baseIndicadores = round2(baseIndicadores + baseElegivelIndicadorVenda(v, produtosMap, opcoesBase).base);
       });
     }
     const comissaoIndicadores = round2(baseIndicadores * pctInd / 100);

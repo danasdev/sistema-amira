@@ -55,6 +55,17 @@ const produtos = (await getDocs(collection(db, "produtos"))).docs
   .filter((p) => p.ativo !== false)
   .sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR"));
 
+// Indicadores (divulgadores) que podem ser atribuidos a venda — a venda
+// grava `ref` = codigo, o mesmo campo do pedido do site, e entra na
+// comissao do indicador (ver ../vendas-indicador.js). So os ativos. Se a
+// lista nao carregar, o PDV segue vendendo sem o campo.
+const indicadores = await getDocs(collection(db, "indicadores"))
+  .then((s) => s.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((r) => r.ativo !== false && r.codigo)
+    .sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR")))
+  .catch(() => []);
+
 // preco de venda (varejo, com desconto do site aplicado); estoque e um so
 // pool (nao ha mais divisao varejo/atacado)
 const precoDe = (p) => infoPreco(p, "varejo").precoFinal;
@@ -83,6 +94,12 @@ root.innerHTML = `
       <strong>Venda</strong>
       <label>Cliente</label><input id="cliente" placeholder="Nome do cliente" required>
       <label>Contato</label><input id="cliente-contato" placeholder="Telefone / WhatsApp" required>
+      ${indicadores.length ? `
+      <label>Indicador (opcional)</label>
+      <select id="indicador">
+        <option value="">Sem indicador</option>
+        ${indicadores.map((r) => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.nome || r.codigo)} (${escapeHtml(r.codigo)})</option>`).join("")}
+      </select>` : ""}
       <label>Observacoes (opcional)</label>
       <textarea id="observacoes" rows="2" placeholder="Ex.: embrulho pra presente, retirar as 18h..."></textarea>
       <div id="cart" style="margin-top:10px"></div>
@@ -540,6 +557,7 @@ function resetarVenda() {
   $("#cliente").value = "";
   $("#cliente-contato").value = "";
   $("#observacoes").value = "";
+  if ($("#indicador")) $("#indicador").value = "";
   $("#desconto").value = "0";
   renderResultados();
   renderCart();
@@ -628,6 +646,12 @@ async function finalizar() {
     const cliente = $("#cliente").value.trim() || null;
     const clienteContato = $("#cliente-contato").value.trim() || null;
     const observacoes = $("#observacoes").value.trim() || null;
+    // So grava os campos quando ha indicador: venda sem indicador nao tem
+    // `ref`, e a consulta `ref != ""` (comissao) nem a le.
+    const indicador = indicadores.find((r) => r.id === $("#indicador")?.value) || null;
+    const camposIndicador = indicador
+      ? { ref: indicador.codigo, indicador_id: indicador.id, indicador_nome: indicador.nome || "" }
+      : {};
     const pagamentosSalvos = pagamentosComJuros(pagamentos);
     const { totalComJuros, custoLojaTotal, valorLiquido } = agregarJuros(pagamentosSalvos);
 
@@ -665,6 +689,7 @@ async function finalizar() {
         cliente,
         cliente_contato: clienteContato,
         observacoes,
+        ...camposIndicador,
         itens: itensVenda,
         subtotal,
         desconto,

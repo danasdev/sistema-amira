@@ -148,16 +148,62 @@ export function baseElegivelIndicador(pedido, produtosMap, {
     const qtd = Math.max(0, Math.trunc(Number(it.quantidade) || 0));
     const modo = it.modo === "atacado" ? "atacado" : "varejo";
 
-    const slugsProduto = filtrosDoProduto(produto, camadaPrincipalSlug)[camadaPrincipalSlug] || [];
-    const ehExcluido =
-      produtoEhIphone(produto, camadaPrincipalSlug) ||
-      slugsProduto.some((s) => excl.has(String(s).toLowerCase())) ||
-      excl.has(String(produto.categoria || "").toLowerCase());
-    if (ehExcluido) {
+    if (excluidoDaBaseIndicador(produto, camadaPrincipalSlug, excl)) {
       itensExcluidos += qtd;
       continue;
     }
     base += infoPreco(produto, modo).precoFinal * qtd;
   }
   return { base: Math.round(base * 100) / 100, itensExcluidos };
+}
+
+// O produto fica de fora da base de comissao de indicador? (iPhone, ou
+// marcado com um slug excluido em configuracoes/indicadores)
+function excluidoDaBaseIndicador(produto, camadaPrincipalSlug, excl) {
+  const slugsProduto = filtrosDoProduto(produto, camadaPrincipalSlug)[camadaPrincipalSlug] || [];
+  return produtoEhIphone(produto, camadaPrincipalSlug) ||
+    slugsProduto.some((s) => excl.has(String(s).toLowerCase())) ||
+    excl.has(String(produto.categoria || "").toLowerCase());
+}
+
+/**
+ * Base elegivel para comissao de indicador numa venda do PDV (colecao
+ * `vendas`, canal "loja", com `ref` = codigo do indicador). Diferente do
+ * pedido do site, a venda GUARDA o preco de cada item (preco_unit/subtotal)
+ * — vale o que foi cobrado, nao o preco atual do catalogo. Mesma exclusao do
+ * site (iPhone / slugs excluidos), olhando o produto no catalogo; item de
+ * produto que nao existe mais entra (nao da para saber se era iPhone, e o
+ * valor cobrado e conhecido).
+ *
+ * O desconto da venda (em R$, sobre o total) e repartido na proporcao: a
+ * base e a soma dos itens elegiveis x (total / subtotal).
+ *
+ * @param {object} venda             documento de `vendas`
+ * @param {Map<string,object>} produtosMap  produtoId -> produto
+ * @param {{camadaPrincipalSlug?:string, excluirSlugs?:string[]}} opcoes
+ * @returns {{ base:number, itensExcluidos:number }}
+ */
+export function baseElegivelIndicadorVenda(venda, produtosMap, {
+  camadaPrincipalSlug = null,
+  excluirSlugs = [],
+} = {}) {
+  const excl = new Set((excluirSlugs || []).map((s) => String(s).toLowerCase().trim()));
+  let elegivel = 0;
+  let somaItens = 0;
+  let itensExcluidos = 0;
+  for (const it of venda.itens || []) {
+    const qtd = Math.max(0, Number(it.qtd) || 0);
+    const valor = Number.isFinite(Number(it.subtotal)) ? Number(it.subtotal) : (Number(it.preco_unit) || 0) * qtd;
+    somaItens += valor;
+    const produto = produtosMap.get(it.produtoId);
+    if (produto && excluidoDaBaseIndicador(produto, camadaPrincipalSlug, excl)) {
+      itensExcluidos += qtd;
+      continue;
+    }
+    elegivel += valor;
+  }
+  const subtotal = Number(venda.subtotal) || somaItens;
+  const total = Number.isFinite(Number(venda.total)) ? Number(venda.total) : subtotal;
+  const fator = subtotal > 0 ? Math.min(1, Math.max(0, total / subtotal)) : 1;
+  return { base: Math.round(elegivel * fator * 100) / 100, itensExcluidos };
 }

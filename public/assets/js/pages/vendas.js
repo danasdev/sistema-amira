@@ -8,6 +8,7 @@ import {
 import { brl, round2 } from "../money.js";
 import { derivarItensPedido, contaComoPago } from "../produtos-schema.js";
 import { mapaDoCatalogo } from "../catalogo-cache.js";
+import { vendasPdvComIndicador } from "../vendas-indicador.js";
 import { criarClientePoint, configPointEfetiva, storageSeguro } from "../point.js";
 
 const CANAIS = { loja: "Loja fisica", site: "Site proprio", mercado_livre: "Mercado Livre", shopee: "Shopee" };
@@ -125,23 +126,28 @@ async function carregar() {
 async function carregarTotalIndicadores(lista) {
   try {
     // Catalogo do cache da aba (so preco) em vez de reler os ~200 produtos.
-    const [pedidosSnap, produtosMap] = await Promise.all([
+    const [pedidosSnap, produtosMap, vendasPdv] = await Promise.all([
       getDocs(query(collection(db, "pedidos"), where("ref", "!=", ""))),
       mapaDoCatalogo(),
+      vendasPdvComIndicador({ fresco: true }),
     ]);
     const pedidos = pedidosSnap.docs
       .map((d) => ({ id: d.id, ...d.data() }))
       .filter((p) => contaComoPago(p.status));
 
-    let total = 0;
-    for (const p of pedidos) total = round2(total + derivarItensPedido(p, produtosMap).subtotal);
+    let totalSite = 0;
+    for (const p of pedidos) totalSite = round2(totalSite + derivarItensPedido(p, produtosMap).subtotal);
+    const totalLoja = round2(vendasPdv.reduce((s, v) => s + (Number(v.total) || 0), 0));
+    const total = round2(totalSite + totalLoja);
 
     lista.innerHTML = `
       <div class="card">
-        <strong>Vendas via indicadores (link ?ref= do site)</strong>
-        <p class="muted">Soma de todos os pedidos do site com um indicador atribuido, pagos (aguardando pagamento e cancelados ficam de fora). Total derivado dos precos atuais do catalogo.</p>
+        <strong>Vendas via indicadores</strong>
+        <p class="muted">Pedidos do site com indicador (link ?ref=), pagos — aguardando pagamento e cancelados ficam de fora; total derivado dos precos atuais do catalogo. Mais as vendas da loja em que o indicador foi escolhido no PDV (valor cobrado).</p>
+        <div class="totais"><span>Site (${pedidos.length} pedido(s))</span><span>${brl(totalSite)}</span></div>
+        <div class="totais"><span>Loja (${vendasPdv.length} venda(s))</span><span>${brl(totalLoja)}</span></div>
         <div class="totais big"><span>Total vendido</span><span>${brl(total)}</span></div>
-        <p class="muted">Pedidos considerados: ${pedidos.length}. Detalhamento por indicador em <a href="/indicadores">Indicadores</a>.</p>
+        <p class="muted">Detalhamento por indicador em <a href="/indicadores">Indicadores</a>.</p>
       </div>`;
   } catch (e) {
     erroCard(lista, e, carregar);
@@ -164,6 +170,7 @@ function detalhe(v) {
         : ""
     }
     ${v.observacoes ? `<p class="muted">Obs: ${escapeHtml(v.observacoes)}</p>` : ""}
+    ${v.ref ? `<p class="muted">Indicador: ${escapeHtml(v.indicador_nome || "-")} (<code>${escapeHtml(String(v.ref))}</code>)</p>` : ""}
     ${
       v.canal === "site" && v.status === "concluida"
         ? `<p class="muted">Pedido do site entregue/retirado. Pra desfazer, cancele o pedido na tela Pedidos — isso devolve o estoque e atualiza aqui tambem.</p>`
