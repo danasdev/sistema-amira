@@ -29,7 +29,8 @@ export const ROTAS_REAIS = {
   "/api/point/estornar": "api/point/estornar.js",
   "/api/point/terminais": "api/point/terminais.js",
   "/api/point/diagnostico": "api/point/diagnostico.js",
-  "/api/webhook-point": "api/webhook-point.js"
+  "/api/webhook-point": "api/webhook-point.js",
+  "/api/imagekit-auth": "api/imagekit-auth.js"
 };
 
 // res.status(n).json(obj), como na Vercel.

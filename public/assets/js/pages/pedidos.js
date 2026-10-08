@@ -6,6 +6,7 @@ import {
 } from "../db.js";
 import { brl } from "../money.js";
 import { derivarItensPedido } from "../produtos-schema.js";
+import { mapaDoCatalogo } from "../catalogo-cache.js";
 
 // ── Pedidos do SITE (colecao `pedidos`, compartilhada com flora-5754a) ──────
 // O pedido do site NAO guarda valor: itens = {produtoId, quantidade, modo}.
@@ -16,6 +17,12 @@ import { derivarItensPedido } from "../produtos-schema.js";
 // dupla). Cancelar um pedido que ja baixou devolve o estoque. As rules ja
 // permitem `update` de `pedidos` e de
 // `produtos` para admin — nada muda no site.
+//
+// LEITURAS (mesma cota grátis do site): o catálogo vem do cache da aba
+// (../catalogo-cache.js — só preço/classificação; a baixa de estoque relê o
+// produto na transação). O nome de cada comprador é lido UMA vez por aba e
+// reaproveitado em "Atualizar". Mudar o status relê só aquele pedido — antes
+// relia catálogo + 300 pedidos + todos os compradores a cada mudança.
 
 const STATUS = ["aguardando_pagamento", "pago", "preparando", "enviado", "entregue", "cancelado"];
 const STATUS_LABEL = {
@@ -143,27 +150,49 @@ async function carregar() {
   const lista = document.getElementById("lista");
   lista.innerHTML = `<div class="card">Carregando...</div>`;
   try {
-    const [prodSnap, pedSnap] = await Promise.all([
-      getDocs(collection(db, "produtos")),
+    const [mapa, pedSnap] = await Promise.all([
+      mapaDoCatalogo(),
       getDocs(query(collection(db, "pedidos"), orderBy("criadoEm", "desc"), limit(300))),
     ]);
-    produtosMap = new Map(prodSnap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
+    produtosMap = mapa;
     pedidos = pedSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-    // nomes dos compradores (uids unicos; clientes repetidos contam uma vez)
-    const uids = [...new Set(pedidos.map((p) => p.uidComprador).filter(Boolean))];
-    compradores = {};
-    await Promise.all(
-      uids.map(async (uid) => {
-        try {
-          const s = await getDoc(doc(db, "usuarios", uid));
-          if (s.exists()) compradores[uid] = s.data();
-        } catch (_) {}
-      })
-    );
+    await buscarCompradores(pedidos);
     renderLista();
   } catch (e) {
     erroCard(lista, e, carregar);
+  }
+}
+
+// Nome dos compradores: só os uids que esta aba ainda não conhece (cliente
+// repetido, ou já visto num "Atualizar" anterior, não gasta leitura de novo).
+// Quem não tem perfil fica marcado como null para não ser relido.
+async function buscarCompradores(lista) {
+  const faltam = [...new Set(lista.map((p) => p.uidComprador).filter(Boolean))]
+    .filter((uid) => !(uid in compradores));
+  await Promise.all(
+    faltam.map(async (uid) => {
+      try {
+        const s = await getDoc(doc(db, "usuarios", uid));
+        compradores[uid] = s.exists() ? s.data() : null;
+      } catch (_) {
+        // falha de rede: tenta de novo no próximo carregamento
+      }
+    })
+  );
+}
+
+// Relê só um pedido (depois de mudar o status) e troca na lista.
+async function recarregarPedido(id) {
+  try {
+    const snap = await getDoc(doc(db, "pedidos", id));
+    if (snap.exists()) {
+      const novo = { id: snap.id, ...snap.data() };
+      const i = pedidos.findIndex((x) => x.id === id);
+      if (i >= 0) pedidos[i] = novo; else pedidos.unshift(novo);
+    }
+    renderLista();
+  } catch (_) {
+    await carregar();
   }
 }
 
@@ -296,7 +325,7 @@ function detalhe(p, statusSugerido) {
       await mudarStatus(p, novo);
       toast("Pedido atualizado.", "ok");
       bg.remove();
-      carregar();
+      recarregarPedido(p.id);
     } catch (e) {
       toast(e?.message || "Falha ao atualizar o pedido.", "err");
     }

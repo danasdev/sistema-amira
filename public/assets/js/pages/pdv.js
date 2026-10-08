@@ -8,6 +8,7 @@ import {
 import { brl, round2, parseNum } from "../money.js";
 import { calcularComissao } from "../regras.js";
 import { infoPreco, estoquePorModo } from "../produtos-schema.js";
+import { invalidarCatalogo } from "../catalogo-cache.js";
 import { FORMAS_JUROS, FORMAS_PARCELAVEIS, parcelasDisponiveis, taxasDe, infoParcela, resumoTotais } from "../juros.js";
 import {
   TIPO_POINT, criarClientePoint, novoCobrancaId, quemPagaJuros, marcarAprovada, pagamentoDaMaquininha,
@@ -687,6 +688,7 @@ async function finalizar() {
       const p = produtos.find((x) => x.id === it.produtoId);
       if (p) p.estoque = estoqueDe(p) - it.qtd;
     });
+    invalidarCatalogo(); // estoque mudou: as outras telas desta aba releem
     resetarVenda();
   } catch (e) {
     toast(e?.message || "Falha ao registrar venda.", "err");

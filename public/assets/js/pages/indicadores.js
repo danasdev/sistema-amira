@@ -7,6 +7,12 @@ import {
 } from "../db.js";
 import { brl, round2 } from "../money.js";
 import { baseElegivelIndicador, derivarItensPedido, contaComoPago } from "../produtos-schema.js";
+import { mapaDoCatalogo } from "../catalogo-cache.js";
+
+// LEITURAS (mesma cota grátis do site): o catálogo vem do cache da aba
+// (../catalogo-cache.js) em vez de ser relido a cada apuração/perfil, e os
+// pedidos de um período são lidos uma vez e reaproveitados pelos perfis de
+// indicador — "Apurar" é o que busca de novo.
 
 const { perfil } = await requireAuth({ roles: ["admin"] });
 const root = initShell({ perfil, active: "indicadores" });
@@ -31,6 +37,23 @@ async function getCamadaPrincipalSlug() {
   const snap = await getDocs(query(collection(db, "camadas"), orderBy("ordem", "asc")));
   camadaPrincipalSlugCache = snap.docs.length ? (snap.docs[0].data().slug || null) : null;
   return camadaPrincipalSlugCache;
+}
+
+// Pedidos de um periodo (todos os status; quem chama filtra ref/pago).
+const pedidosPorPeriodo = new Map();
+function pedidosDoPeriodo(per, { fresco = false } = {}) {
+  if (!fresco && pedidosPorPeriodo.has(per)) return pedidosPorPeriodo.get(per);
+  const { inicio, fim } = periodoParaIntervalo(per);
+  const promessa = getDocs(query(
+    collection(db, "pedidos"),
+    where("criadoEm", ">=", Timestamp.fromDate(inicio)),
+    where("criadoEm", "<", Timestamp.fromDate(fim)),
+    orderBy("criadoEm", "desc")
+  ))
+    .then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() })))
+    .catch((e) => { pedidosPorPeriodo.delete(per); throw e; });
+  pedidosPorPeriodo.set(per, promessa);
+  return promessa;
 }
 
 // Mesmo calculo do site (frontend/src/pages/services/pedidos.js:
@@ -103,11 +126,10 @@ async function carregar() {
 // o indicador vendeu", nao a base de comissao.
 async function carregarTotaisVendidos() {
   try {
-    const [pedidosSnap, produtosSnap] = await Promise.all([
+    const [pedidosSnap, produtosMap] = await Promise.all([
       getDocs(query(collection(db, "pedidos"), where("ref", "!=", ""))),
-      getDocs(collection(db, "produtos")),
+      mapaDoCatalogo(),
     ]);
-    const produtosMap = new Map(produtosSnap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
     const pedidos = pedidosSnap.docs
       .map((d) => ({ id: d.id, ...d.data() }))
       .filter((p) => contaComoPago(p.status));
@@ -280,22 +302,13 @@ function verPerfil(r) {
     const stats = c.querySelector("#pf-stats");
     stats.innerHTML = "Apurando...";
     const per = c.querySelector("#pf-periodo").value || periodo;
-    const { inicio, fim } = periodoParaIntervalo(per);
     try {
-      const [pedidosSnap, produtosSnap, camadaPrincipalSlug] = await Promise.all([
-        getDocs(query(
-          collection(db, "pedidos"),
-          where("criadoEm", ">=", Timestamp.fromDate(inicio)),
-          where("criadoEm", "<", Timestamp.fromDate(fim)),
-          orderBy("criadoEm", "desc")
-        )),
-        getDocs(collection(db, "produtos")),
+      const [todosDoPeriodo, produtosMap, camadaPrincipalSlug] = await Promise.all([
+        pedidosDoPeriodo(per),
+        mapaDoCatalogo(),
         getCamadaPrincipalSlug(),
       ]);
-      const produtosMap = new Map(produtosSnap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
-      const pedidos = pedidosSnap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .filter((p) => p.ref === r.codigo && contaComoPago(p.status));
+      const pedidos = todosDoPeriodo.filter((p) => p.ref === r.codigo && contaComoPago(p.status));
 
       let qtd = 0;
       let base = 0;
@@ -322,18 +335,11 @@ async function apurar() {
   const box = document.getElementById("apuracao");
   box.innerHTML = `<p class="muted">Apurando...</p>`;
 
-  const { inicio, fim } = periodoParaIntervalo(periodo);
-
-  let pedidos, produtosSnap, camadaPrincipalSlug;
+  let pedidos, produtosMap, camadaPrincipalSlug;
   try {
-    [pedidos, produtosSnap, camadaPrincipalSlug] = await Promise.all([
-      getDocs(query(
-        collection(db, "pedidos"),
-        where("criadoEm", ">=", Timestamp.fromDate(inicio)),
-        where("criadoEm", "<", Timestamp.fromDate(fim)),
-        orderBy("criadoEm", "desc")
-      )).then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() }))),
-      getDocs(collection(db, "produtos")),
+    [pedidos, produtosMap, camadaPrincipalSlug] = await Promise.all([
+      pedidosDoPeriodo(periodo, { fresco: true }),
+      mapaDoCatalogo(),
       getCamadaPrincipalSlug(),
     ]);
   } catch (e) {
@@ -341,7 +347,6 @@ async function apurar() {
     return;
   }
 
-  const produtosMap = new Map(produtosSnap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
   const nomePorCodigo = Object.fromEntries(indicadores.map((r) => [r.codigo, r]));
 
   // Lista venda por venda (nao agregado por indicador) — o resumo por

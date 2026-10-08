@@ -6,6 +6,14 @@ import {
 } from "../db.js";
 import { brl, round2 } from "../money.js";
 import { baseElegivelIndicador, contaComoPago } from "../produtos-schema.js";
+import { mapaDoCatalogo } from "../catalogo-cache.js";
+import { listarCamadas, camadaPrincipal } from "../camadas.js";
+
+// LEITURAS (mesma cota grátis do site): as vendas do MÊS são lidas uma vez
+// só e servem para tudo do mês corrente — "hoje" é um recorte delas, e a
+// contabilidade do mês atual reaproveita a mesma lista. Antes a mesma venda
+// era lida até 3 vezes por abertura do painel (hoje, mês, contabilidade).
+// Catálogo e camadas só são lidos se houver pedido de indicador no período.
 
 const CANAIS = { loja: "Loja fisica", site: "Site proprio", mercado_livre: "Mercado Livre", shopee: "Shopee" };
 
@@ -14,6 +22,9 @@ const root = initShell({ perfil, active: "dashboard" });
 root.innerHTML = `<div class="card">Carregando...</div>`;
 
 const ehAdm = perfil.role === "admin";
+// Vendas do mes corrente ja lidas no topo (admin) — a contabilidade do mes
+// atual reaproveita em vez de consultar de novo.
+let vendasMesAtualCache = null;
 const agoraDash = new Date();
 const periodoAtual = `${agoraDash.getFullYear()}-${String(agoraDash.getMonth() + 1).padStart(2, "0")}`;
 
@@ -21,13 +32,21 @@ try {
 const t0 = Timestamp.fromDate(inicioDoDia());
 const m0 = Timestamp.fromDate(inicioDoMes());
 
-// ---- vendas de hoje ----
-const qHoje = ehAdm
-  ? query(collection(db, "vendas"), where("data", ">=", t0), orderBy("data", "desc"))
-  : query(collection(db, "vendas"), where("vendedor_uid", "==", perfil.id), where("data", ">=", t0), orderBy("data", "desc"));
-const vendasHoje = (await getDocs(qHoje)).docs
-  .map((d) => d.data())
-  .filter((v) => v.status === "concluida");
+// ---- vendas do mes (todos os status) — base de "hoje", do mes e da
+// contabilidade do mes corrente. Filtra so por `data` (sem `status` na
+// query, que exigiria um indice composto novo) e descarta os nao-concluidos
+// em memoria.
+const qMes = ehAdm
+  ? query(collection(db, "vendas"), where("data", ">=", m0))
+  : query(collection(db, "vendas"), where("vendedor_uid", "==", perfil.id), where("data", ">=", m0));
+const vendasDoMes = (await getDocs(qMes)).docs.map((d) => d.data());
+if (ehAdm) vendasMesAtualCache = vendasDoMes;
+const millis = (ts) => (ts && typeof ts.toMillis === "function" ? ts.toMillis() : 0);
+
+// ---- vendas de hoje (recorte do mes, mais recentes primeiro) ----
+const vendasHoje = vendasDoMes
+  .filter((v) => v.status === "concluida" && millis(v.data) >= t0.toMillis())
+  .sort((a, b) => millis(b.data) - millis(a.data));
 
 const totalHoje = vendasHoje.reduce((s, v) => s + (v.total || 0), 0);
 const qtdHoje = vendasHoje.length;
@@ -43,16 +62,8 @@ const caixaDoc = (await getDocs(query(
 ))).docs[0];
 const caixa = caixaDoc ? caixaDoc.data() : null;
 
-// ---- vendas do mes (todos os canais, igual "vendas hoje" — comissao
-// continua so canal loja). Filtra so por `data` (sem `status` na query, que
-// exigiria um indice composto novo) e descarta os nao-concluidos em
-// memoria, igual "vendas hoje" ja faz.
-const qMes = ehAdm
-  ? query(collection(db, "vendas"), where("data", ">=", m0))
-  : query(collection(db, "vendas"), where("vendedor_uid", "==", perfil.id), where("data", ">=", m0));
-const vendasMes = (await getDocs(qMes)).docs
-  .map((d) => d.data())
-  .filter((v) => v.status === "concluida");
+// ---- vendas do mes (todos os canais — comissao continua so canal loja) ----
+const vendasMes = vendasDoMes.filter((v) => v.status === "concluida");
 const qtdMes = vendasMes.length;
 const totalMes = round2(vendasMes.reduce((s, v) => s + (v.total || 0), 0));
 const comissaoMes = vendasMes
@@ -155,14 +166,19 @@ async function carregarContabilidade(periodo) {
     const ini = Timestamp.fromDate(inicio);
     const f = Timestamp.fromDate(fim);
 
-    const [lojaSnap, siteSnap, gastosSnap, cfgInd] = await Promise.all([
-      getDocs(query(collection(db, "vendas"), where("canal", "==", "loja"), where("status", "==", "concluida"), where("data", ">=", ini), where("data", "<", f))),
-      getDocs(query(collection(db, "vendas"), where("canal", "==", "site"), where("status", "==", "concluida"), where("data", ">=", ini), where("data", "<", f))),
+    // Mes corrente: as vendas ja lidas no topo do painel. Outro mes: consulta.
+    const doMes = periodo === periodoAtual && vendasMesAtualCache;
+    const concluidasDoCanal = (canal) => vendasMesAtualCache.filter((v) => v.canal === canal && v.status === "concluida");
+    const [vendasLoja, vendasSite, gastosSnap, cfgInd] = await Promise.all([
+      doMes
+        ? concluidasDoCanal("loja")
+        : getDocs(query(collection(db, "vendas"), where("canal", "==", "loja"), where("status", "==", "concluida"), where("data", ">=", ini), where("data", "<", f))).then((s) => s.docs.map((d) => d.data())),
+      doMes
+        ? concluidasDoCanal("site")
+        : getDocs(query(collection(db, "vendas"), where("canal", "==", "site"), where("status", "==", "concluida"), where("data", ">=", ini), where("data", "<", f))).then((s) => s.docs.map((d) => d.data())),
       getDocs(query(collection(db, "gastos"), where("data", ">=", ini), where("data", "<", f))),
       getConfigIndicadores(),
     ]);
-    const vendasLoja = lojaSnap.docs.map((d) => d.data());
-    const vendasSite = siteSnap.docs.map((d) => d.data());
     const gastosMes = gastosSnap.docs.map((d) => d.data());
 
     // Receita bruta = valor de tabela (`total`), igual pra loja e site — o
@@ -195,19 +211,17 @@ async function carregarContabilidade(periodo) {
     // so precisamos do TOTAL do mes, nao do detalhamento por indicador.
     const pctInd = Number(cfgInd.percentual ?? 5);
     const excluirSlugs = cfgInd.categorias_excluidas || [];
-    const [pedidosSnap, produtosSnap, camadasSnap] = await Promise.all([
-      getDocs(query(collection(db, "pedidos"), where("criadoEm", ">=", ini), where("criadoEm", "<", f))),
-      getDocs(collection(db, "produtos")),
-      getDocs(query(collection(db, "camadas"), orderBy("ordem", "asc"))),
-    ]);
-    const produtosMap = new Map(produtosSnap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
-    const camadaPrincipalSlug = camadasSnap.docs.length ? (camadasSnap.docs[0].data().slug || null) : null;
+    const pedidosSnap = await getDocs(query(collection(db, "pedidos"), where("criadoEm", ">=", ini), where("criadoEm", "<", f)));
+    const pedidosDeIndicador = pedidosSnap.docs.map((d) => d.data()).filter((p) => p.ref && contaComoPago(p.status));
     let baseIndicadores = 0;
-    pedidosSnap.docs.forEach((d) => {
-      const p = d.data();
-      if (!p.ref || !contaComoPago(p.status)) return;
-      baseIndicadores = round2(baseIndicadores + baseElegivelIndicador(p, produtosMap, { camadaPrincipalSlug, excluirSlugs }).base);
-    });
+    // Catalogo (cache da aba) e camadas so quando ha o que apurar.
+    if (pedidosDeIndicador.length) {
+      const [produtosMap, camadas] = await Promise.all([mapaDoCatalogo(), listarCamadas()]);
+      const camadaPrincipalSlug = camadaPrincipal(camadas)?.slug || null;
+      pedidosDeIndicador.forEach((p) => {
+        baseIndicadores = round2(baseIndicadores + baseElegivelIndicador(p, produtosMap, { camadaPrincipalSlug, excluirSlugs }).base);
+      });
+    }
     const comissaoIndicadores = round2(baseIndicadores * pctInd / 100);
 
     const valorLiquido = round2(receitaBruta + juros - gastosTotal - comissaoVendedores - comissaoIndicadores);
