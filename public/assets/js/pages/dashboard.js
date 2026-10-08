@@ -1,6 +1,7 @@
 import { requireAuth } from "../auth.js";
 import { initShell, escapeHtml, fmtData, erroCard, tituloCard, vazio } from "../ui.js";
 import { icone } from "../icons.js";
+import { contar } from "../componentes.js";
 import {
   db, collection, query, where, orderBy, getDocs, Timestamp,
   inicioDoDia, inicioDoMes, periodoParaIntervalo, getConfigIndicadores,
@@ -128,17 +129,17 @@ const marcasEixo = new Set([1, 5, 10, 15, 20, 25, diasNoMes]);
 
 root.innerHTML = `
   <div class="grid cols-4">
-    <div class="card kpi"><div class="l">${icone("tendencia", { tam: 16 })}Faturamento hoje</div><div class="n">${brl(totalHoje)}</div><div class="d">${qtdHoje} venda${qtdHoje === 1 ? "" : "s"}</div></div>
-    <div class="card kpi"><div class="l">${icone("calendario", { tam: 16 })}Faturamento no mês</div><div class="n">${brl(totalMes)}</div><div class="d">${qtdMes} venda${qtdMes === 1 ? "" : "s"} em ${nomeMes}</div></div>
-    <div class="card kpi"><div class="l">${icone("sacola", { tam: 16 })}Ticket médio hoje</div><div class="n">${brl(ticket)}</div><div class="d">valor médio por venda</div></div>
-    <div class="card kpi"><div class="l">${icone("comissoes", { tam: 16 })}${ehAdm ? "Comissões no mês" : "Minha comissão no mês"}</div><div class="n">${brl(comissaoMes)}</div><div class="d">vendas da loja</div></div>
+    <div class="card kpi"><div class="l">${icone("tendencia", { tam: 16 })}Hoje</div><div class="n" data-contar="${totalHoje}">${brl(totalHoje)}</div><div class="d">${qtdHoje} venda${qtdHoje === 1 ? "" : "s"}</div></div>
+    <div class="card kpi"><div class="l">${icone("calendario", { tam: 16 })}No mês</div><div class="n" data-contar="${totalMes}">${brl(totalMes)}</div><div class="d">${qtdMes} venda${qtdMes === 1 ? "" : "s"}</div></div>
+    <div class="card kpi"><div class="l">${icone("sacola", { tam: 16 })}Ticket médio</div><div class="n" data-contar="${ticket}">${brl(ticket)}</div><div class="d">hoje</div></div>
+    <div class="card kpi"><div class="l">${icone("comissoes", { tam: 16 })}${ehAdm ? "Comissões" : "Minha comissão"}</div><div class="n" data-contar="${comissaoMes}">${brl(comissaoMes)}</div><div class="d">no mês</div></div>
   </div>
 
   <div class="card" style="margin-top:var(--s-5)">
     ${tituloCard("grafico", `Faturamento por dia — ${nomeMes}`, `<a class="btn ghost" href="/vendas">${icone("vendas", { tam: 16 })}Ver vendas</a>`)}
     ${
       maxDia > 0
-        ? `<p class="muted" style="margin:-6px 0 6px">Maior dia: <strong>${brl(maxDia)}</strong> &middot; hoje em dourado &middot; passe o mouse numa coluna pra ver o valor</p>
+        ? `<p class="muted" style="margin:-8px 0 6px">Melhor dia ${brl(maxDia)} &middot; hoje em dourado</p>
       <div class="graf-colunas" role="img" aria-label="Faturamento diário de ${nomeMes}">
         ${porDia
           .map((x, i) => {
@@ -181,7 +182,6 @@ root.innerHTML = `
     ehAdm
       ? `<div class="card">
     ${tituloCard("cofre", "Contabilidade mensal")}
-    <p class="muted">Loja + site: receita bruta, resultado do parcelamento (juros do cliente menos custo da maquininha), gastos, comissões e o valor líquido do mês. Soma direto de vendas e gastos por data, não das sessões de caixa.</p>
     <div class="row" style="align-items:end;max-width:420px">
       <div><label for="periodo-contab">Mês</label><input type="month" id="periodo-contab" value="${periodoAtual}"></div>
       <div style="flex:0 0 auto"><button class="btn ghost" id="ver-contab">Ver mês</button></div>
@@ -190,6 +190,9 @@ root.innerHTML = `
   </div>`
       : ""
   }`;
+
+// Numeros sobem ate o valor (contador animado)
+root.querySelectorAll("[data-contar]").forEach((el) => contar(el, Number(el.dataset.contar) || 0, brl));
 
 if (ehAdm) {
   document.getElementById("ver-contab").onclick = () =>

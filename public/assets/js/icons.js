@@ -1,4 +1,4 @@
-// Icones (Lucide v0.460, ISC — https://lucide.dev). Uma familia so, traco 2.
+// Icones (Lucide v0.460, ISC — https://lucide.dev). Uma familia so, traco 1.5 (fino).
 // Gerado a partir de lucide-static; pra adicionar um, copie os elementos
 // internos do SVG do Lucide pra este mapa.
 // Uso: icone("pdv") -> string <svg> herda a cor do texto (currentColor).
@@ -63,5 +63,5 @@ const P = {
 export function icone(nome, { tam = 18, cls = "" } = {}) {
   const corpo = P[nome];
   if (!corpo) return "";
-  return `<svg class="ic ${cls}" width="${tam}" height="${tam}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${corpo}</svg>`;
+  return `<svg class="ic ${cls}" width="${tam}" height="${tam}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${corpo}</svg>`;
 }
