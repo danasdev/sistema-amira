@@ -25,7 +25,7 @@ Desde 2026-09 o sistema **compartilha o projeto Firebase do site** (`flora-5754a
 | Tema | Como e |
 |---|---|
 | Projeto Firebase | `flora-5754a` (o mesmo do site). O sistema e um **app separado** neste repo, publicado num alvo de Hosting proprio (`interno` -> `https://flora-5754a-interno.web.app`). |
-| Regras e indices | `firestore.rules` e `firestore.indexes.json` **deste repo sao os canonicos** (cobrem site + sistema). **Deploy de regras/indices sai daqui, nunca do repo do site.** A copia em `~/Documentos/Amira/` e so referencia. |
+| Regras e indices | `firestore.rules` e `firestore.indexes.json` **deste repo sao os canonicos** (cobrem site + sistema). **Deploy de regras/indices sai daqui, nunca do repo do site.** O repo do site guarda uma copia **identica** dos dois arquivos: ao mudar aqui, copie os dois para o site no mesmo dia (e ao receber mudanca vinda do site, compare campo por campo antes de aceitar). |
 | Papel de admin | `role: "admin"` no doc `usuarios/{uid}` (igual ao site). O outro papel e `role: "vendedor"`. |
 | Schema de produto | E o schema do SITE: `codigoBarras`, `precoVarejo`/`precoAtacado` (dois valores), `estoque` (um so, sem separacao varejo/atacado), `filtros{}` por camada, `ativo`, `descontoAtivo`/`descontoPercentual`, etc. Ver secao 8. |
 | "Indicador" x "Revendedor" | Aqui, **indicador** = divulgador com link `?ref=` (colecao `indicadores`, sem login). No site, "revendedor" e outra coisa: comprador atacado com CNPJ (`usuarios.tipoConta == "revendedor"`). Nao confundir. |
