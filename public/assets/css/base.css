@@ -741,3 +741,68 @@ td .btn { min-height: 32px; padding: 5px 12px; font-size: 13px; }
 }
 .pt-banner-local > div { flex: 1 1 260px; min-width: 0; }
 .pt-banner-local .btn { flex: 0 0 auto; }
+
+/* Segmentado sem pilula animada (botao .on pinta o proprio fundo) */
+.seg.simples > button { transition: background var(--t) var(--glide), color var(--t-rapido), box-shadow var(--t); }
+.seg.simples > button.on { background: #fff; color: var(--ink); box-shadow: 0 2px 8px -2px rgba(40, 20, 25, .18), 0 0 0 .5px rgba(40, 20, 25, .05); }
+
+/* ── Pagina publica da conta do crediario (/conta) ────────────────────── */
+.conta { max-width: 480px; margin: 0 auto; padding: max(20px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom)); }
+.conta > * { animation: subir 520ms var(--glide) both; }
+.conta > *:nth-child(3) { animation-delay: 60ms; }
+.conta > *:nth-child(4) { animation-delay: 120ms; }
+.conta-topo { display: flex; justify-content: center; padding: 10px 0 18px; }
+.conta-topo .logo-marca { width: 96px; }
+.conta-card { margin-bottom: 14px; }
+.conta-hero { text-align: center; padding: 28px 22px 22px; }
+.conta-ola { color: var(--muted); font-size: 14px; }
+.conta-rot { margin-top: 14px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.conta-valor { font-size: 46px; font-weight: 300; letter-spacing: -.045em; line-height: 1.1; font-variant-numeric: tabular-nums; margin: 4px 0 6px; }
+.conta-mini { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.conta-mini > div { background: rgba(255, 255, 255, .55); border: 1px solid var(--vidro-borda); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; }
+.conta-mini span { font-size: 12px; color: var(--muted); }
+.conta-mini strong { font-weight: 500; font-variant-numeric: tabular-nums; }
+.conta-metodos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+.conta-metodos button {
+  display: flex; align-items: center; gap: 10px; text-align: left; padding: 12px; border-radius: 14px; cursor: pointer;
+  border: 1.5px solid var(--vidro-borda); background: rgba(255, 255, 255, .6); color: var(--ink);
+  transition: border-color var(--t-rapido), background var(--t-rapido), transform var(--t-mola) var(--mola);
+}
+.conta-metodos button .ic { color: var(--vinho); }
+.conta-metodos button span { display: flex; flex-direction: column; line-height: 1.25; }
+.conta-metodos button strong { font-weight: 500; }
+.conta-metodos button small { font-size: 11.5px; color: var(--muted); }
+.conta-metodos button:active { transform: scale(.97); }
+.conta-metodos button[aria-checked="true"] { border-color: var(--vinho); background: #fff; box-shadow: 0 6px 18px -10px rgba(122, 31, 43, .5); }
+.conta-qr { display: grid; place-items: center; margin: 4px 0 6px; }
+.conta-qr img { width: min(230px, 70vw); aspect-ratio: 1; border-radius: 14px; background: #fff; padding: 10px; border: 1px solid var(--hair); }
+.conta-valor-pq { font-weight: 500; font-variant-numeric: tabular-nums; }
+.conta-esperando { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--ink-2); font-size: 13.5px; margin-top: 14px; }
+.conta-esperando .ponto { width: 8px; height: 8px; border-radius: 50%; background: var(--ouro); animation: pulso-ouro 1.6s infinite; }
+@keyframes pulso-ouro { 0% { box-shadow: 0 0 0 0 rgba(184, 135, 58, .5); } 70% { box-shadow: 0 0 0 9px rgba(184, 135, 58, 0); } 100% { box-shadow: 0 0 0 0 rgba(184, 135, 58, 0); } }
+.conta-sucesso { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; padding: 10px 0; }
+.conta-sucesso strong { font-size: 18px; font-weight: 500; margin-top: 8px; }
+.conta-sucesso span { color: var(--muted); }
+.check-anim { width: 64px; height: 64px; }
+.check-anim circle { fill: none; stroke: var(--ok); stroke-width: 2; stroke-dasharray: 151; stroke-dashoffset: 151; animation: desenhar 600ms var(--glide) forwards; }
+.check-anim path { fill: none; stroke: var(--ok); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 36; stroke-dashoffset: 36; animation: desenhar 420ms 450ms var(--mola) forwards; }
+@keyframes desenhar { to { stroke-dashoffset: 0; } }
+.conta-lista { display: flex; flex-direction: column; }
+.conta-item { display: flex; align-items: center; gap: 12px; padding: 11px 0; }
+.conta-item + .conta-item { border-top: 1px solid var(--hair); }
+.ci-ic { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 auto; }
+.ci-ic.compra { background: var(--vinho-claro); color: var(--vinho); }
+.ci-ic.pag { background: var(--ok-bg); color: var(--ok); }
+.ci-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ci-txt strong { font-weight: 500; font-size: 14px; }
+.ci-txt span { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ci-val { display: flex; flex-direction: column; align-items: flex-end; }
+.ci-val strong { font-weight: 500; font-variant-numeric: tabular-nums; }
+.ci-val .ci-pos { color: var(--ok); }
+.ci-val span { font-size: 11.5px; color: var(--muted); }
+.conta-pe { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); font-size: 12px; margin-top: 18px; }
+.conta-esqueleto { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 34px 22px; }
+.conta-esqueleto span { display: block; height: 14px; width: 60%; border-radius: 8px; background: linear-gradient(90deg, var(--fill), var(--fill-2), var(--fill)); background-size: 200% 100%; animation: brilho 1.2s linear infinite; }
+.conta-esqueleto span:nth-child(2) { height: 40px; width: 70%; }
+.conta-esqueleto span:nth-child(3) { width: 85%; height: 8px; }
+@keyframes brilho { to { background-position: -200% 0; } }

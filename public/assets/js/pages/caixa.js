@@ -3,7 +3,7 @@ import { initShell, toast, modal, escapeHtml, fmtData, erroCard, tituloCard } fr
 import { icone } from "../icons.js";
 import {
   db, collection, getDocs, query, where, orderBy, limit,
-  doc, addDoc, updateDoc, serverTimestamp, arrayUnion, Timestamp,
+  doc, addDoc, updateDoc, serverTimestamp, arrayUnion, Timestamp, writeBatch,
   inicioDoDia,
 } from "../db.js";
 import { brl, round2, parseNum } from "../money.js";
@@ -122,6 +122,24 @@ async function renderBody() {
 
   // Recebimentos do crediario nesta sessao: o que o cliente pagou na hora
   // da venda (PDV) e os pagamentos lancados depois em Clientes.
+  // Pagamentos ONLINE do link do crediario que chegaram com o caixa
+  // fechado: este caixa (o proximo aberto) assume. Se falhar, so nao aparecem
+  // agora — continuam aguardando e entram na proxima vez.
+  try {
+    const aguardando = await getDocs(query(
+      collection(db, "crediario_pagamentos"),
+      where("aguardando_caixa", "==", true)
+    ));
+    if (!aguardando.empty) {
+      const lote = writeBatch(db);
+      aguardando.docs.forEach((d) => lote.update(d.ref, { caixa_id: caixa.id, aguardando_caixa: false }));
+      await lote.commit();
+      toast(`${aguardando.size} pagamento(s) online do crediário entraram neste caixa.`, "info");
+    }
+  } catch (e) {
+    console.warn("Não consegui assumir os pagamentos online pendentes:", e);
+  }
+
   const recebimentos = (await getDocs(query(
     collection(db, "crediario_pagamentos"),
     where("caixa_id", "==", caixa.id)
