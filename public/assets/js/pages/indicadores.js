@@ -6,8 +6,13 @@ import {
   getConfigIndicadores, periodoParaIntervalo,
 } from "../db.js";
 import { brl, round2 } from "../money.js";
-import { baseElegivelIndicador, derivarItensPedido, contaComoPago } from "../produtos-schema.js";
+import { baseElegivelIndicador, baseElegivelIndicadorVenda, derivarItensPedido, contaComoPago } from "../produtos-schema.js";
 import { mapaDoCatalogo } from "../catalogo-cache.js";
+import { vendasPdvComIndicador, noPeriodo } from "../vendas-indicador.js";
+
+// DUAS ORIGENS somam para o indicador: pedidos do SITE com `ref` (link
+// ?ref=) e vendas do PDV em que o vendedor escolheu o indicador (`ref` na
+// venda). Ver ../vendas-indicador.js.
 
 // LEITURAS (mesma cota grátis do site): o catálogo vem do cache da aba
 // (../catalogo-cache.js) em vez de ser relido a cada apuração/perfil, e os
@@ -126,9 +131,10 @@ async function carregar() {
 // o indicador vendeu", nao a base de comissao.
 async function carregarTotaisVendidos() {
   try {
-    const [pedidosSnap, produtosMap] = await Promise.all([
+    const [pedidosSnap, produtosMap, vendasPdv] = await Promise.all([
       getDocs(query(collection(db, "pedidos"), where("ref", "!=", ""))),
       mapaDoCatalogo(),
+      vendasPdvComIndicador({ fresco: true }),
     ]);
     const pedidos = pedidosSnap.docs
       .map((d) => ({ id: d.id, ...d.data() }))
@@ -144,6 +150,15 @@ async function carregarTotaisVendidos() {
       a.total = round2(a.total + subtotal);
       totalGeralVendido = round2(totalGeralVendido + subtotal);
     }
+    // vendas do PDV: vale o total cobrado (ja com desconto)
+    for (const v of vendasPdv) {
+      const cod = String(v.ref);
+      const total = Number(v.total) || 0;
+      const a = vendidoPorCodigo[cod] || (vendidoPorCodigo[cod] = { qtd: 0, total: 0 });
+      a.qtd++;
+      a.total = round2(a.total + total);
+      totalGeralVendido = round2(totalGeralVendido + total);
+    }
   } catch (_) {
     vendidoPorCodigo = {};
     totalGeralVendido = 0;
@@ -155,7 +170,7 @@ function renderTabela() {
   document.getElementById("tabela").innerHTML = `
     <div class="tabela-wrap"><table>
       <thead><tr>
-        <th>Nome</th><th>Codigo</th><th>Link</th><th class="right">Pedidos</th>
+        <th>Nome</th><th>Codigo</th><th>Link</th><th class="right">Vendas</th>
         <th class="right">Total vendido</th><th>Contato</th><th>Ativo</th><th></th>
       </tr></thead>
       <tbody>
@@ -276,7 +291,7 @@ function verPerfil(r) {
     <div class="totais big" style="margin-top:10px">
       <span>Total vendido (historico completo)</span><span>${brl(v.total)}</span>
     </div>
-    <p class="muted">${v.qtd} pedido(s) pago(s) no historico. A comissao e repassada manualmente, uma vez por mes.</p>
+    <p class="muted">${v.qtd} venda(s) no historico (pedidos pagos do site + vendas do PDV). A comissao e repassada manualmente, uma vez por mes.</p>
 
     <label style="margin-top:14px">Anotacoes</label>
     <textarea id="pf-anotacoes" rows="4" placeholder="Anotacoes internas sobre este indicador (combinados, historico de pagamento, etc.)">${escapeHtml(r.anotacoes || "")}</textarea>`;
@@ -303,12 +318,15 @@ function verPerfil(r) {
     stats.innerHTML = "Apurando...";
     const per = c.querySelector("#pf-periodo").value || periodo;
     try {
-      const [todosDoPeriodo, produtosMap, camadaPrincipalSlug] = await Promise.all([
+      const { inicio, fim } = periodoParaIntervalo(per);
+      const [todosDoPeriodo, produtosMap, camadaPrincipalSlug, vendasPdv] = await Promise.all([
         pedidosDoPeriodo(per),
         mapaDoCatalogo(),
         getCamadaPrincipalSlug(),
+        vendasPdvComIndicador(),
       ]);
       const pedidos = todosDoPeriodo.filter((p) => p.ref === r.codigo && contaComoPago(p.status));
+      const vendasDoIndicador = noPeriodo(vendasPdv, inicio, fim).filter((v) => v.ref === r.codigo);
 
       let qtd = 0;
       let base = 0;
@@ -316,10 +334,14 @@ function verPerfil(r) {
         qtd++;
         base = round2(base + baseElegivelIndicador(p, produtosMap, { camadaPrincipalSlug, excluirSlugs }).base);
       }
+      for (const v of vendasDoIndicador) {
+        qtd++;
+        base = round2(base + baseElegivelIndicadorVenda(v, produtosMap, { camadaPrincipalSlug, excluirSlugs }).base);
+      }
       const comissao = round2(base * pct / 100);
 
       stats.innerHTML = `
-        <div class="totais"><span>Pedidos pagos no periodo</span><span>${qtd}</span></div>
+        <div class="totais"><span>Vendas no periodo (site ${pedidos.length} + loja ${vendasDoIndicador.length})</span><span>${qtd}</span></div>
         <div class="totais"><span>Base elegivel (sem iPhone)</span><span>${brl(base)}</span></div>
         <div class="totais big"><span>Comissao a receber (${pct}%)</span><span>${brl(comissao)}</span></div>`;
     } catch (e) {
@@ -335,12 +357,14 @@ async function apurar() {
   const box = document.getElementById("apuracao");
   box.innerHTML = `<p class="muted">Apurando...</p>`;
 
-  let pedidos, produtosMap, camadaPrincipalSlug;
+  const { inicio, fim } = periodoParaIntervalo(periodo);
+  let pedidos, produtosMap, camadaPrincipalSlug, vendasPdv;
   try {
-    [pedidos, produtosMap, camadaPrincipalSlug] = await Promise.all([
+    [pedidos, produtosMap, camadaPrincipalSlug, vendasPdv] = await Promise.all([
       pedidosDoPeriodo(periodo, { fresco: true }),
       mapaDoCatalogo(),
       getCamadaPrincipalSlug(),
+      vendasPdvComIndicador(),
     ]);
   } catch (e) {
     box.innerHTML = `<p style="color:var(--warn)">Nao foi possivel apurar (${escapeHtml(e?.message || "")}).</p>`;
@@ -351,23 +375,35 @@ async function apurar() {
 
   // Lista venda por venda (nao agregado por indicador) — o resumo por
   // indicador fica so no "Perfil" de cada um (botao na tabela acima).
-  const comRef = pedidos
+  const opcoesBase = { camadaPrincipalSlug, excluirSlugs };
+  const millis = (ts) => (ts && typeof ts.toMillis === "function" ? ts.toMillis() : 0);
+  const doSite = pedidos
     .filter((p) => p.ref && contaComoPago(p.status))
-    .map((p) => {
-      const { base } = baseElegivelIndicador(p, produtosMap, { camadaPrincipalSlug, excluirSlugs });
-      return { p, base, comissao: round2(base * pct / 100) };
-    });
+    .map((p) => ({
+      data: p.criadoEm, ref: p.ref, origem: "Site",
+      idHtml: `<code title="id: ${escapeHtml(p.id)}">${codigoRetirada(p.id)}</code>`,
+      base: baseElegivelIndicador(p, produtosMap, opcoesBase).base,
+    }));
+  const daLoja = noPeriodo(vendasPdv, inicio, fim).map((v) => ({
+    data: v.data, ref: v.ref, origem: "Loja",
+    idHtml: `Venda #${escapeHtml(String(v.numero ?? "-"))}`,
+    base: baseElegivelIndicadorVenda(v, produtosMap, opcoesBase).base,
+  }));
+  const comRef = [...doSite, ...daLoja]
+    .map((l) => ({ ...l, comissao: round2(l.base * pct / 100) }))
+    .sort((a, b) => millis(b.data) - millis(a.data));
 
   const linhas = comRef
-    .map(({ p, base, comissao }) => {
-      const rev = nomePorCodigo[p.ref];
+    .map((l) => {
+      const rev = nomePorCodigo[l.ref];
       return `<tr>
-        <td>${fmtData(p.criadoEm)}</td>
-        <td>${escapeHtml(rev?.nome || `(codigo ${escapeHtml(String(p.ref))} sem cadastro)`)}</td>
-        <td><code>${escapeHtml(String(p.ref))}</code></td>
-        <td><code title="id: ${escapeHtml(p.id)}">${codigoRetirada(p.id)}</code></td>
-        <td class="right">${brl(base)}</td>
-        <td class="right">${brl(comissao)}</td>
+        <td>${fmtData(l.data)}</td>
+        <td>${escapeHtml(rev?.nome || `(codigo ${escapeHtml(String(l.ref))} sem cadastro)`)}</td>
+        <td><code>${escapeHtml(String(l.ref))}</code></td>
+        <td>${l.origem}</td>
+        <td>${l.idHtml}</td>
+        <td class="right">${brl(l.base)}</td>
+        <td class="right">${brl(l.comissao)}</td>
       </tr>`;
     })
     .join("");
@@ -378,13 +414,13 @@ async function apurar() {
   box.innerHTML = `
     <div class="tabela-wrap"><table>
       <thead><tr>
-        <th>Data</th><th>Indicador</th><th>Codigo</th><th>Pedido</th>
+        <th>Data</th><th>Indicador</th><th>Codigo</th><th>Origem</th><th>Pedido / venda</th>
         <th class="right">Base elegivel</th><th class="right">Comissao (${pct}%)</th>
       </tr></thead>
       <tbody>
-        ${linhas || `<tr><td colspan="6" class="muted">Sem pedidos com indicador no periodo.</td></tr>`}
-        ${linhas ? `<tr><td colspan="4"><strong>TOTAL (${comRef.length})</strong></td><td class="right"><strong>${brl(totBase)}</strong></td><td class="right"><strong>${brl(totCom)}</strong></td></tr>` : ""}
+        ${linhas || `<tr><td colspan="7" class="muted">Sem vendas com indicador no periodo.</td></tr>`}
+        ${linhas ? `<tr><td colspan="5"><strong>TOTAL (${comRef.length})</strong></td><td class="right"><strong>${brl(totBase)}</strong></td><td class="right"><strong>${brl(totCom)}</strong></td></tr>` : ""}
       </tbody>
     </table></div>
-    <p class="muted">Total derivado dos precos atuais do catalogo (pedido do site nao guarda valor). Pagamento manual. Resumo por indicador no "Perfil" (clique no nome, na tabela acima).</p>`;
+    <p class="muted">Site: total derivado dos precos atuais do catalogo (pedido do site nao guarda valor). Loja: valor cobrado na venda do PDV, com o desconto repartido. iPhone fica fora da base nos dois. Pagamento manual. Resumo por indicador no "Perfil" (clique no nome, na tabela acima).</p>`;
 }
