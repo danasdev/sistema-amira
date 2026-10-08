@@ -1,13 +1,40 @@
 import { requireAuth } from "../auth.js";
 import { initShell, toast, escapeHtml } from "../ui.js";
+import { icone } from "../icons.js";
 import { auth } from "../firebase.js";
 import { db, doc, getDoc, setDoc, updateDoc, serverTimestamp } from "../db.js";
-import { parseNum } from "../money.js";
+import { parseNum, valorCampo } from "../money.js";
 import { FORMAS_JUROS } from "../juros.js";
 import { criarClientePoint, storageSeguro, lerTesteLocal, ativarTesteLocal, desativarTesteLocal } from "../point.js";
+import {
+  segmentadoHtml, segmentado, stepperHtml, ligarSteppers, valorStepper,
+  tagsInput, botaoSalvar, switchHtml, linhaHtml,
+} from "../componentes.js";
 
-const BASES = ["total", "total_sem_desconto", "margem"];
+// Configuracoes no estilo "Ajustes": uma aba por assunto, listas agrupadas
+// e controles de escolha (interruptor, pilulas, stepper, etiquetas) no lugar
+// de texto digitado. O que cada aba grava e o mesmo de antes.
+
+const FORMAS_CONHECIDAS = [
+  { valor: "dinheiro", rotulo: "Dinheiro", ic: "dinheiro", cor: "verde" },
+  { valor: "pix", rotulo: "Pix", ic: "pix", cor: "azul" },
+  { valor: "debito", rotulo: "Débito", ic: "debito", cor: "cinza" },
+  { valor: "credito", rotulo: "Crédito", ic: "cartao", cor: "" },
+  { valor: "crediario", rotulo: "Crediário", ic: "crediario", cor: "ouro" },
+];
+const BASES = [
+  { valor: "total", rotulo: "Valor pago", sub: "Sobre o total pago pelo cliente, já com desconto." },
+  { valor: "total_sem_desconto", rotulo: "Preço cheio", sub: "Sobre os itens a preço de tabela, ignorando o desconto." },
+  { valor: "margem", rotulo: "Margem", sub: "Sobre venda menos custo. Fica em zero enquanto o produto não tiver custo." },
+];
 const FORMA_LABEL = { credito: "Crédito", crediario: "Crediário", debito: "Débito" };
+const ABAS = [
+  { valor: "loja", rotulo: "Loja", ic: "produtos" },
+  { valor: "vendas", rotulo: "Vendas", ic: "pdv" },
+  { valor: "parcelas", rotulo: "Parcelamento", ic: "desconto" },
+  { valor: "maquininha", rotulo: "Maquininha", ic: "cartao" },
+  { valor: "indicadores", rotulo: "Indicadores", ic: "indicadores" },
+];
 
 const { perfil } = await requireAuth({ roles: ["admin"] });
 const root = initShell({ perfil, active: "config" });
@@ -22,215 +49,203 @@ const parc = cfg.parcelamento || {};
 const point = cfg.point || {};
 const ind = snapInd.exists() ? snapInd.data() : {};
 
+const formasAtuais = cfg.formas_pagamento ?? ["dinheiro", "pix", "debito", "credito"];
+// Formas personalizadas que ja existam no banco continuam aparecendo.
+const formasLista = [
+  ...FORMAS_CONHECIDAS,
+  ...formasAtuais.filter((f) => !FORMAS_CONHECIDAS.some((k) => k.valor === f)).map((f) => ({ valor: f, rotulo: f, ic: "tag", cor: "cinza" })),
+];
+// Tabela de juros em memoria: { forma: { "n": {cliente, loja} } }
+const juros = Object.fromEntries(FORMAS_JUROS.map((f) => [f, { ...(parc.juros?.[f] || {}) }]));
+let formaJuros = "credito";
+const abaInicial = ABAS.some((a) => a.valor === location.hash.slice(1)) ? location.hash.slice(1) : "loja";
+const baseAtual = com.base || "total";
+
 root.innerHTML = `
-  <div class="card">
-    <strong>Configuracoes do sistema interno</strong>
-    <p class="muted">O catalogo, os precos e o estoque sao os do site (mesma base). Aqui ficam so os ajustes internos.</p>
-    <label>Nome da loja (recibo)</label>
-    <input id="nome" value="${escapeHtml(cfg.nome_loja ?? "Amira")}">
-    <label>CNPJ</label>
-    <input id="cnpj" value="${escapeHtml(cfg.cnpj ?? "")}">
-    <label>Formas de pagamento do PDV (separadas por virgula)</label>
-    <input id="formas" value="${escapeHtml((cfg.formas_pagamento ?? ["dinheiro", "pix", "debito", "credito"]).join(", "))}">
-    <div class="row">
-      <div>
-        <label>Base padrao da comissao (vendedor)</label>
-        <select id="base">
-          ${BASES.map((b) => `<option ${b === (com.base || "total") ? "selected" : ""}>${b}</option>`).join("")}
-        </select>
+<div class="config-wrap">
+  <div class="config-abas">${segmentadoHtml("abas", ABAS, abaInicial, { classe: "vidro-seg" })}</div>
+
+  <section class="config-painel" data-aba="loja">
+    <div class="lista-rotulo">Identificação</div>
+    <div class="lista">
+      ${linhaHtml({ ic: "produtos", titulo: "Nome da loja", sub: "Aparece no recibo", controle: `<input id="nome" value="${escapeHtml(cfg.nome_loja ?? "Amira")}" placeholder="Amira" autocomplete="off">` })}
+      ${linhaHtml({ ic: "nota", cor: "cinza", titulo: "CNPJ", controle: `<input id="cnpj" value="${escapeHtml(cfg.cnpj ?? "")}" placeholder="00.000.000/0000-00" inputmode="numeric" autocomplete="off">` })}
+    </div>
+    <div class="barra-salvar"><button class="btn" id="salvar-loja">Salvar</button></div>
+  </section>
+
+  <section class="config-painel" data-aba="vendas">
+    <div class="lista-rotulo">Formas de pagamento no PDV</div>
+    <div class="lista" id="lista-formas">
+      ${formasLista.map((f) => linhaHtml({ ic: f.ic, cor: f.cor, titulo: escapeHtml(f.rotulo), controle: switchHtml(`forma-${f.valor}`, formasAtuais.includes(f.valor), f.rotulo) })).join("")}
+    </div>
+
+    <div class="lista-rotulo">Comissão dos vendedores</div>
+    <div class="lista">
+      ${linhaHtml({ ic: "comissoes", titulo: "Calcular sobre", sub: `<span id="base-sub">${BASES.find((b) => b.valor === baseAtual)?.sub || ""}</span>`, classe: "coluna", controle: segmentadoHtml("base", BASES, baseAtual, { classe: "bloco" }) })}
+      ${linhaHtml({ ic: "tendencia", cor: "ouro", titulo: "Percentual padrão", controle: stepperHtml({ id: "pct", valor: com.percentual_padrao ?? 0, min: 0, max: 50, passo: 0.5, sufixo: "%", rotulo: "Percentual padrão" }) })}
+    </div>
+    <div class="barra-salvar"><button class="btn" id="salvar-vendas">Salvar</button></div>
+  </section>
+
+  <section class="config-painel" data-aba="parcelas">
+    <div class="lista-rotulo">Limites</div>
+    <div class="lista">
+      ${linhaHtml({ ic: "desconto", titulo: "Parcelar em até", controle: stepperHtml({ id: "parc-max", valor: parc.maximo ?? 12, min: 1, max: 24, passo: 1, sufixo: "x", rotulo: "Máximo de parcelas" }) })}
+      ${linhaHtml({ ic: "dinheiro", cor: "verde", titulo: "Parcela mínima", sub: "Venda pequena oferece menos parcelas", controle: `<div class="campo-rs"><input id="parc-min" value="${valorCampo(parc.minimo_parcela ?? 0)}" inputmode="decimal"></div>` })}
+    </div>
+
+    <div class="lista-rotulo" style="display:flex;align-items:center;gap:10px;margin-right:4px">
+      <span style="flex:1">Juros por parcela</span>
+      ${segmentadoHtml("forma-juros", FORMAS_JUROS.map((f) => ({ valor: f, rotulo: FORMA_LABEL[f] })), formaJuros)}
+    </div>
+    <div class="lista sem-ic"><div class="juros-grade" id="juros-grade"></div></div>
+    <p class="lista-nota">Cliente: acrescentado ao que o cliente paga. Loja: custo da maquininha sobre o valor original. Zero nos dois = sem juros.</p>
+    <div class="barra-salvar"><button class="btn" id="salvar-parc">Salvar</button></div>
+  </section>
+
+  <section class="config-painel" data-aba="maquininha">
+    <div class="lista-rotulo">Mercado Pago Point</div>
+    <div class="lista">
+      ${linhaHtml({ ic: "cartao", titulo: "Cobrar na maquininha", sub: "Botão no PDV para crédito e débito", controle: switchHtml("point-ativo", point.ativo === true, "Cobrar na maquininha") })}
+      ${linhaHtml({ ic: "cadeado", cor: "cinza", titulo: "Exigir a maquininha", sub: "Bloqueia cartão registrado à mão", controle: switchHtml("point-obrigatorio", point.obrigatorio === true, "Exigir a maquininha"), classe: point.ativo === true ? "" : "desligada" })}
+      ${linhaHtml({ ic: "pedidos", cor: "azul", titulo: "Endereço da API", sub: "Vazio = mesmo domínio do sistema", controle: `<input id="point-api" type="url" value="${escapeHtml(point.api_url ?? "")}" placeholder="https://…vercel.app" autocomplete="off">` })}
+    </div>
+    <div class="barra-salvar">
+      <button class="btn ghost" id="testar-point">${icone("sucesso", { tam: 16 })}Testar conexão</button>
+      <button class="btn" id="salvar-point">Salvar</button>
+    </div>
+    <div id="point-terminais" style="margin-bottom:var(--s-6)"></div>
+
+    <details class="mais">
+      <summary>Testar só neste computador</summary>
+      <div class="lista" style="margin-top:8px">
+        ${linhaHtml({ ic: "pdv", cor: "ouro", titulo: "API local", sub: `<span id="point-local-status"></span>`, controle: `<input id="point-local-url" type="url" value="http://localhost:3001" autocomplete="off">` })}
       </div>
-      <div>
-        <label>Percentual padrao (%)</label>
-        <input id="pct" value="${com.percentual_padrao ?? 0}">
+      <p class="lista-nota">Vale só neste navegador. As vendas são reais: use um valor pequeno.</p>
+      <div class="barra-salvar">
+        <button class="btn ghost" id="point-local-desativar">Desativar</button>
+        <button class="btn sec" id="point-local-ativar">Ativar aqui</button>
       </div>
+    </details>
+  </section>
+
+  <section class="config-painel" data-aba="indicadores">
+    <div class="lista-rotulo">Link de indicação (?ref=)</div>
+    <div class="lista">
+      ${linhaHtml({ ic: "pedidos", cor: "azul", titulo: "Endereço do site", sub: "Base para montar o link", controle: `<input id="ind-site" type="url" value="${escapeHtml(ind.site_url ?? "")}" placeholder="https://…" autocomplete="off">` })}
+      ${linhaHtml({ ic: "indicadores", titulo: "Comissão do indicador", controle: stepperHtml({ id: "ind-pct", valor: ind.percentual ?? 5, min: 0, max: 50, passo: 0.5, sufixo: "%", rotulo: "Comissão do indicador" }) })}
+      ${linhaHtml({ ic: "fechar", cor: "cinza", titulo: "Sem comissão", sub: "Categorias fora da base (iPhone já é excluído)", classe: "coluna", controle: `<div id="ind-cat"></div>` })}
     </div>
-    <p class="muted">Base "total" = sobre o valor final pago. "total_sem_desconto" = sobre os itens a preco cheio. "margem" = (venda - custo); o catalogo do site nao guarda custo, entao "margem" fica em 0 ate existir esse campo.</p>
-    <button class="btn" id="salvar" style="margin-top:8px">Salvar</button>
-  </div>
+    <div class="barra-salvar"><button class="btn" id="salvar-ind">Salvar</button></div>
+  </section>
+</div>`;
 
-  <div class="card">
-    <strong>Parcelamento e juros do PDV</strong>
-    <p class="muted">Ao escolher "credito" ou "crediario" no pagamento do PDV, o vendedor pode parcelar (debito nunca parcela). Aqui voce define ate quantas vezes, o valor minimo de cada parcela, e os juros de cada forma.</p>
-    <div class="row">
-      <div><label>Maximo de parcelas</label><input id="parc-max" value="${parc.maximo ?? 12}"></div>
-      <div><label>Valor minimo por parcela (R$)</label><input id="parc-min" value="${parc.minimo_parcela ?? 0}"></div>
-    </div>
-    <p class="muted">Uma linha por quantidade de parcelas. <strong>Cliente</strong> e o juros somado ao valor que o cliente paga nessa forma; <strong>loja</strong> e o custo da loja (ex.: taxa da maquininha) sobre o valor original — os dois sao independentes, nao precisam ser iguais. Quantidade sem linha = sem juros nem custo.</p>
+const $ = (s) => root.querySelector(s);
+ligarSteppers(root, (st) => {
+  if (st.querySelector("#parc-max")) desenharJuros();
+});
 
-    <label>Juros no Crédito</label>
-    <div class="juros-linhas" id="juros-linhas-credito"></div>
-    <button type="button" class="btn ghost" id="add-parcela-credito" style="margin-top:6px">+ Adicionar parcela</button>
-
-    <label style="margin-top:20px">Juros no Crediário</label>
-    <div class="juros-linhas" id="juros-linhas-crediario"></div>
-    <button type="button" class="btn ghost" id="add-parcela-crediario" style="margin-top:6px">+ Adicionar parcela</button>
-
-    <label style="margin-top:20px">Juros no Débito</label>
-    <p class="muted" style="margin:-2px 0 6px">Debito nunca parcela — so a taxa a vista.</p>
-    <div class="juros-linhas" id="juros-linhas-debito"></div>
-
-    <button class="btn" id="salvar-parc" style="margin-top:16px">Salvar parcelamento</button>
-  </div>
-
-  <div class="card">
-    <strong>Maquininha (Mercado Pago Point)</strong>
-    <p class="muted">Cobra crédito e débito direto na maquininha pelo PDV e traz a taxa real de cada venda. Precisa da API (Vercel) no ar e da maquininha em modo PDV — passo a passo no README, seção "Maquininha Mercado Pago Point".</p>
-    <label style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)"><input type="checkbox" id="point-ativo" ${point.ativo === true ? "checked" : ""} style="width:auto"> Usar a maquininha no PDV (botão "Cobrar na maquininha")</label>
-    <label style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)"><input type="checkbox" id="point-obrigatorio" ${point.obrigatorio === true ? "checked" : ""} style="width:auto"> Exigir a maquininha em crédito e débito (não deixa registrar cartão manualmente)</label>
-    <label>URL da API publicada (deixe vazio se a API estiver no mesmo domínio do sistema)</label>
-    <input id="point-api" value="${escapeHtml(point.api_url ?? "")}" placeholder="https://SEU-PROJETO.vercel.app">
-    <p class="muted" style="margin:6px 0 0">Esta é a URL da API <strong>publicada</strong> (Vercel) e vale pra todos os usuários; o exemplo acima é só um modelo. Testando no seu computador? Use o bloco <strong>“Teste só neste computador”</strong> logo abaixo, que já vem com <code>http://localhost:3001</code> e não altera isto.</p>
-    <div class="row" style="margin-top:12px">
-      <div style="flex:0 0 auto"><button class="btn" id="salvar-point">Salvar maquininha</button></div>
-      <div style="flex:0 0 auto"><button class="btn ghost" id="testar-point">Testar conexão</button></div>
-    </div>
-    <div id="point-terminais" style="margin-top:12px"></div>
-  </div>
-
-  <div class="card">
-    <strong>Teste só neste computador</strong>
-    <p class="muted">Liga a maquininha <em>só neste navegador</em>, usando a API que roda no seu computador (<code>npm run api:dev</code>). Não muda nada pros outros usuários nem a configuração acima. Ideal pro primeiro teste. As vendas feitas assim são <strong>reais</strong> (gravam no sistema e baixam o estoque): use um valor pequeno e cancele depois em Vendas.</p>
-    <label>URL da API local</label>
-    <input id="point-local-url" value="http://localhost:3001" placeholder="http://localhost:3001" autocomplete="off">
-    <div class="row" style="margin-top:12px">
-      <div style="flex:0 0 auto"><button class="btn" id="point-local-ativar">Ativar teste local</button></div>
-      <div style="flex:0 0 auto"><button class="btn ghost" id="point-local-desativar">Desativar</button></div>
-    </div>
-    <p id="point-local-status" class="muted" style="margin-top:10px"></p>
-  </div>
-
-  <div class="card">
-    <strong>Comissao de indicadores (link ?ref= no site)</strong>
-    <p class="muted">Compra feita pelo link de um indicador gera comissao sobre o total dos itens elegiveis. Pagamento e manual. O link do indicador nao tem prazo de validade.</p>
-    <label>URL do site (para montar o link)</label>
-    <input id="ind-site" value="${escapeHtml(ind.site_url ?? "")}" placeholder="https://flora-5754a.web.app">
-    <label>Percentual (%)</label>
-    <input id="ind-pct" value="${ind.percentual ?? 5}">
-    <label>Slugs de categoria que NAO geram comissao (separados por virgula)</label>
-    <input id="ind-cat" value="${escapeHtml((ind.categorias_excluidas ?? ["iphones"]).join(", "))}">
-    <p class="muted">No site, iPhone e a opcao da camada principal cujo slug comeca com <code>iphone</code>. O prefixo "iphone" ja e reconhecido automaticamente; liste aqui outros slugs a excluir, se houver.</p>
-    <button class="btn" id="salvar-ind" style="margin-top:8px">Salvar indicadores</button>
-  </div>`;
-
-// ── Juros por parcela: uma linha por quantidade, editavel/removivel na hora
-// (credito/crediario) — debito fica fixo em "a vista" (nunca parcela de
-// verdade, so tem sentido a taxa em 1x). Le/grava sempre o objeto
-// {parcelas: {cliente, loja}} direto, sem passar por formato de texto.
-function linhaJurosHtml(parcela, taxas, removivel) {
-  return `
-    <div class="cart-line juros-linha">
-      ${
-        removivel
-          ? `<input type="number" min="1" step="1" class="jl-parcela" value="${parcela}" aria-label="Numero de parcelas" style="width:56px">`
-          : `<input type="number" value="1" disabled class="jl-parcela" aria-label="Debito e sempre a vista" style="width:56px">`
-      }
-      <span class="muted">x &middot; cliente</span>
-      <input type="number" min="0" step="0.01" class="jl-cliente" value="${Number(taxas?.cliente) || 0}" aria-label="Juros do cliente, em porcentagem">
-      <span class="muted">% &middot; loja</span>
-      <input type="number" min="0" step="0.01" class="jl-loja" value="${Number(taxas?.loja) || 0}" aria-label="Custo da loja, em porcentagem">
-      <span class="muted">%</span>
-      ${removivel ? `<button type="button" class="btn ghost jl-remover" aria-label="Remover esta parcela">&times;</button>` : ""}
-    </div>`;
+// ── Abas ─────────────────────────────────────────────────────────────────
+function mostrarAba(aba) {
+  root.querySelectorAll(".config-painel").forEach((p) => (p.hidden = p.dataset.aba !== aba));
+  history.replaceState(null, "", `#${aba}`);
 }
+segmentado($("#abas"), mostrarAba);
+mostrarAba(abaInicial);
 
-function ligarRemocao(forma) {
-  document.querySelectorAll(`#juros-linhas-${forma} .jl-remover`).forEach((b) => {
-    b.onclick = () => {
-      b.closest(".juros-linha").remove();
-      if (!document.querySelector(`#juros-linhas-${forma} .juros-linha`))
-        document.getElementById(`juros-linhas-${forma}`).innerHTML = `<p class="muted">Nenhuma parcela configurada.</p>`;
-    };
-  });
-}
-
-function montarLinhasForma(forma) {
-  const container = document.getElementById(`juros-linhas-${forma}`);
-  const tabela = parc.juros?.[forma] || {};
-  if (forma === "debito") {
-    container.innerHTML = linhaJurosHtml(1, tabela["1"], false);
-    return;
+// ── Loja ─────────────────────────────────────────────────────────────────
+// CNPJ formatado enquanto digita (so numeros na entrada).
+$("#cnpj").oninput = (e) => {
+  const d = e.target.value.replace(/\D/g, "").slice(0, 14);
+  e.target.value = d
+    .replace(/^(\d{2})(\d)/, "$1.$2")
+    .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
+    .replace(/\.(\d{3})(\d)/, ".$1/$2")
+    .replace(/(\d{4})(\d)/, "$1-$2");
+};
+botaoSalvar($("#salvar-loja"), async () => {
+  const nome = $("#nome").value.trim();
+  if (!nome) {
+    toast("Informe o nome da loja.", "err");
+    return false;
   }
-  const parcelas = Object.keys(tabela).map(Number).sort((a, b) => a - b);
-  container.innerHTML = parcelas.length
-    ? parcelas.map((p) => linhaJurosHtml(p, tabela[String(p)], true)).join("")
-    : `<p class="muted">Nenhuma parcela configurada.</p>`;
-  ligarRemocao(forma);
-}
+  await setDoc(doc(db, "configuracoes", "sistema"), { nome_loja: nome, cnpj: $("#cnpj").value.trim(), atualizadoEm: serverTimestamp() }, { merge: true });
+});
 
-montarLinhasForma("credito");
-montarLinhasForma("crediario");
-montarLinhasForma("debito");
-
-for (const forma of ["credito", "crediario"]) {
-  document.getElementById(`add-parcela-${forma}`).onclick = () => {
-    const container = document.getElementById(`juros-linhas-${forma}`);
-    container.querySelector("p.muted")?.remove();
-    const existentes = container.querySelectorAll(".jl-parcela");
-    const proxima = Array.from(existentes).reduce((m, inp) => Math.max(m, Math.trunc(+inp.value) || 0), 0) + 1;
-    container.insertAdjacentHTML("beforeend", linhaJurosHtml(proxima, { cliente: 0, loja: 0 }, true));
-    ligarRemocao(forma);
-    const novas = container.querySelectorAll(".jl-parcela");
-    novas[novas.length - 1].focus();
-  };
-}
-
-/** Le as linhas da tela e monta {parcelas: {cliente, loja}} pra essa forma. */
-function lerTabelaDaTela(forma) {
-  const tabela = {};
-  let duplicada = false;
-  document.querySelectorAll(`#juros-linhas-${forma} .juros-linha`).forEach((linha) => {
-    const parcela = Math.max(1, Math.trunc(parseNum(linha.querySelector(".jl-parcela").value)) || 1);
-    const cliente = Math.max(0, parseNum(linha.querySelector(".jl-cliente").value));
-    const loja = Math.max(0, parseNum(linha.querySelector(".jl-loja").value));
-    if (tabela[String(parcela)]) duplicada = true;
-    tabela[String(parcela)] = { cliente, loja };
-  });
-  return { tabela, duplicada };
-}
-
-document.getElementById("salvar").onclick = async () => {
+// ── Vendas: formas + comissao ────────────────────────────────────────────
+const segBase = segmentado($("#base"), (v) => ($("#base-sub").textContent = BASES.find((b) => b.valor === v)?.sub || ""));
+botaoSalvar($("#salvar-vendas"), async () => {
+  const formas = formasLista.map((f) => f.valor).filter((f) => $(`#forma-${CSS.escape(f)}`)?.checked);
+  if (!formas.length) {
+    toast("Deixe pelo menos uma forma de pagamento ligada.", "err");
+    return false;
+  }
   await setDoc(
     doc(db, "configuracoes", "sistema"),
     {
-      nome_loja: document.getElementById("nome").value.trim(),
-      cnpj: document.getElementById("cnpj").value.trim(),
-      formas_pagamento: document
-        .getElementById("formas")
-        .value.split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-      comissao: {
-        base: document.getElementById("base").value,
-        percentual_padrao: parseNum(document.getElementById("pct").value),
-      },
+      formas_pagamento: formas,
+      comissao: { base: segBase.valor(), percentual_padrao: valorStepper($("#pct")) },
       atualizadoEm: serverTimestamp(),
     },
     { merge: true }
   );
-  toast("Configuracoes salvas.", "ok");
-};
+});
 
-document.getElementById("salvar-parc").onclick = async () => {
+// ── Parcelamento: grade 1x..max por forma ────────────────────────────────
+// Cada quantidade ate o maximo aparece pronta pra ajustar (sem "+ adicionar
+// parcela" nem linha repetida). Zero/zero = sem juros, e nao e gravado.
+function lerGradeParaMemoria() {
+  root.querySelectorAll("#juros-grade [data-n]").forEach((cel) => {
+    const n = cel.dataset.n;
+    const campo = cel.dataset.campo;
+    const v = Math.max(0, valorStepper(cel.querySelector(".stepper")));
+    const t = juros[formaJuros][n] || (juros[formaJuros][n] = { cliente: 0, loja: 0 });
+    t[campo] = v;
+  });
+}
+function desenharJuros() {
+  const max = formaJuros === "debito" ? 1 : Math.max(1, Math.trunc(valorStepper($("#parc-max"))) || 1);
+  const tab = juros[formaJuros];
+  const cel = (n, campo, rot) =>
+    `<div class="jg-cel" data-n="${n}" data-campo="${campo}">${stepperHtml({ valor: Number(tab[n]?.[campo]) || 0, min: 0, max: 99, passo: 0.5, sufixo: "%", rotulo: `${rot} em ${n}x` })}</div>`;
+  $("#juros-grade").innerHTML =
+    `<div class="jg-cab">${formaJuros === "debito" ? "" : "Vezes"}</div><div class="jg-cab">Cliente paga</div><div class="jg-cab">Custo da loja</div>` +
+    Array.from({ length: max }, (_, i) => String(i + 1))
+      .map((n) => `<div class="jg-x">${formaJuros === "debito" ? "À vista" : `${n}x`}</div>${cel(n, "cliente", "Juros do cliente")}${cel(n, "loja", "Custo da loja")}`)
+      .join("");
+  ligarSteppers($("#juros-grade"), () => lerGradeParaMemoria());
+}
+segmentado($("#forma-juros"), (f) => {
+  lerGradeParaMemoria();
+  formaJuros = f;
+  desenharJuros();
+});
+desenharJuros();
+
+botaoSalvar($("#salvar-parc"), async () => {
+  lerGradeParaMemoria();
+  const maximo = Math.max(1, Math.trunc(valorStepper($("#parc-max"))) || 12);
   // updateDoc com caminhos pontilhados (nao setDoc({merge:true})): merge do
-  // Firestore em mapa aninhado e RECURSIVO — ele so sobrescreveria as chaves
-  // novas, e uma parcela removida da tela continuaria existindo no banco.
-  // Caminho pontilhado substitui o mapa daquela forma por inteiro.
+  // Firestore em mapa aninhado e RECURSIVO — uma parcela zerada continuaria
+  // no banco. Caminho pontilhado substitui o mapa daquela forma inteiro.
   const dados = {
-    "parcelamento.maximo": Math.max(1, Math.trunc(parseNum(document.getElementById("parc-max").value)) || 12),
-    "parcelamento.minimo_parcela": Math.max(0, parseNum(document.getElementById("parc-min").value)),
+    "parcelamento.maximo": maximo,
+    "parcelamento.minimo_parcela": Math.max(0, parseNum($("#parc-min").value)),
     atualizadoEm: serverTimestamp(),
   };
   for (const forma of FORMAS_JUROS) {
-    const { tabela, duplicada } = lerTabelaDaTela(forma);
-    if (duplicada) return toast(`Ha parcelas repetidas em "${FORMA_LABEL[forma]}" — corrija antes de salvar.`, "err");
-    dados[`parcelamento.juros.${forma}`] = tabela;
+    const limite = forma === "debito" ? 1 : maximo;
+    dados[`parcelamento.juros.${forma}`] = Object.fromEntries(
+      Object.entries(juros[forma])
+        .filter(([n, t]) => Number(n) <= limite && (t.cliente > 0 || t.loja > 0))
+        .map(([n, t]) => [n, { cliente: Number(t.cliente) || 0, loja: Number(t.loja) || 0 }])
+    );
   }
-
   try {
     await updateDoc(doc(db, "configuracoes", "sistema"), dados);
   } catch (_) {
-    // Doc "sistema" pode nao existir ainda (primeira configuracao) —
-    // updateDoc falha em doc inexistente; cria com setDoc nesse caso.
+    // Doc "sistema" pode nao existir ainda (primeira configuracao).
     await setDoc(
       doc(db, "configuracoes", "sistema"),
       {
@@ -244,33 +259,40 @@ document.getElementById("salvar-parc").onclick = async () => {
       { merge: true }
     );
   }
-  toast("Parcelamento salvo.", "ok");
-};
+});
+$("#parc-min").onchange = () => ($("#parc-min").value = valorCampo(parseNum($("#parc-min").value)));
 
 // ── Maquininha Point ─────────────────────────────────────────────────────
-document.getElementById("salvar-point").onclick = async () => {
+$("#point-ativo").onchange = () => {
+  const ligado = $("#point-ativo").checked;
+  $("#point-obrigatorio").closest(".linha").classList.toggle("desligada", !ligado);
+  if (!ligado) $("#point-obrigatorio").checked = false;
+};
+$("#point-obrigatorio").onchange = () => {
+  if ($("#point-obrigatorio").checked && !$("#point-ativo").checked) {
+    $("#point-ativo").checked = true;
+    $("#point-ativo").onchange();
+  }
+};
+botaoSalvar($("#salvar-point"), async () => {
   const dados = {
-    ativo: document.getElementById("point-ativo").checked,
-    obrigatorio: document.getElementById("point-obrigatorio").checked,
-    api_url: document.getElementById("point-api").value.trim().replace(/\/+$/, ""),
+    ativo: $("#point-ativo").checked,
+    obrigatorio: $("#point-obrigatorio").checked,
+    api_url: $("#point-api").value.trim().replace(/\/+$/, ""),
   };
   // merge recursivo do Firestore e ok aqui: sao so 3 escalares dentro de `point`
   await setDoc(doc(db, "configuracoes", "sistema"), { point: dados, atualizadoEm: serverTimestamp() }, { merge: true });
-  toast("Maquininha salva.", "ok");
-};
+});
 
-// Onde o teste vai bater: com o "teste local" ligado, na API local; senao na URL do campo
-// (ainda nao salva — da pra conferir antes de gravar).
+// Onde o teste vai bater: com o "teste local" ligado, na API local; senao na
+// URL do campo (ainda nao salva — da pra conferir antes de gravar).
 const storage = storageSeguro();
 function baseDaApi() {
   const local = lerTesteLocal(storage);
-  return local ? local.api_url : document.getElementById("point-api").value.trim().replace(/\/+$/, "");
+  return local ? local.api_url : $("#point-api").value.trim().replace(/\/+$/, "");
 }
 function clientePointDaTela() {
-  return criarClientePoint({
-    apiBase: baseDaApi(),
-    obterToken: () => auth.currentUser.getIdToken(),
-  });
+  return criarClientePoint({ apiBase: baseDaApi(), obterToken: () => auth.currentUser.getIdToken() });
 }
 
 const ROTULO_CHECK = { ok: "OK", aviso: "Atenção", erro: "Falta" };
@@ -289,31 +311,29 @@ function htmlChecklist(d) {
         </li>`
       )
       .join("")}</ul>
-    <p class="${d.ok ? "pt-ok" : "pt-erro"}">${
-      d.ok ? "Tudo pronto pra cobrar." : "Ainda faltam ajustes — resolva os itens marcados como “Falta”."
-    }</p>`;
+    <div class="faixa ${d.ok ? "ok" : "erro"}">${icone(d.ok ? "sucesso" : "erro", { tam: 16 })}<span>${
+      d.ok ? "Tudo pronto pra cobrar." : "Ainda faltam ajustes nos itens marcados como “Falta”."
+    }</span></div>`;
 }
 
 function htmlTerminais(d) {
   if (!d.terminais.length) return "";
   return `
-    <div class="tabela-wrap"><table>
-      <thead><tr><th>Terminal</th><th>Modo</th><th></th></tr></thead>
-      <tbody>${d.terminais
-        .map(
-          (t) => `<tr>
-          <td><code>${escapeHtml(t.id)}</code>${t.selecionado ? ` <span class="tag ativo">em uso</span>` : ""}${t.caixa_externo ? `<div class="muted">caixa ${escapeHtml(String(t.caixa_externo))}</div>` : ""}</td>
-          <td>${t.modo === "PDV" ? `<span class="tag ativo">PDV</span>` : `<span class="tag sem_estoque">${escapeHtml(t.modo || "?")}</span>`}</td>
-          <td class="right">${
+    <div class="lista-rotulo" style="margin-top:var(--s-5)">Terminais</div>
+    <div class="lista">${d.terminais
+      .map((t) =>
+        linhaHtml({
+          ic: "cartao",
+          cor: t.modo === "PDV" ? "verde" : "cinza",
+          titulo: `<code>${escapeHtml(t.id)}</code>${t.selecionado ? ` <span class="tag ativo">em uso</span>` : ""}`,
+          sub: t.modo === "PDV" ? "Modo PDV: recebe as cobranças do sistema" : `Modo ${escapeHtml(t.modo || "?")}: funciona sozinha`,
+          controle:
             t.modo === "PDV"
-              ? `<button class="btn ghost pt-modo" data-id="${escapeHtml(t.id)}" data-modo="STANDALONE">Voltar ao modo autônomo</button>`
-              : `<button class="btn ghost pt-modo" data-id="${escapeHtml(t.id)}" data-modo="PDV">Colocar em modo PDV</button>`
-          }</td>
-        </tr>`
-        )
-        .join("")}</tbody>
-    </table></div>
-    <p class="muted" style="margin-top:8px">Modo PDV: a maquininha espera as cobranças do sistema. Modo autônomo: funciona sozinha, como uma maquininha comum (use se o sistema ou a internet cair).</p>`;
+              ? `<button class="btn ghost pt-modo" data-id="${escapeHtml(t.id)}" data-modo="STANDALONE">Modo autônomo</button>`
+              : `<button class="btn sec pt-modo" data-id="${escapeHtml(t.id)}" data-modo="PDV">Modo PDV</button>`,
+        })
+      )
+      .join("")}</div>`;
 }
 
 // Explica a falha em vez de so repetir a mensagem crua.
@@ -321,29 +341,31 @@ function htmlFalha(e, base) {
   const onde = base ? `<code>${escapeHtml(base)}</code>` : "a API deste site";
   let dica;
   if (e?.rede) {
-    // O navegador esconde do JS o motivo real (API fora do ar e CORS bloqueado parecem iguais), entao o hint cobre os dois.
-    dica = `Não consegui falar com ${onde}. Confira se ela está no ar (no teste local, rode <code>npm run api:dev</code> num terminal aberto na pasta do projeto e deixe-o aberto). Se está rodando, o navegador pode estar bloqueando por <strong>CORS</strong>: a origem deste sistema, <code>${escapeHtml(location.origin)}</code>, precisa estar em <code>CORS_ORIGINS</code> no <code>.env</code> da API (ou deixe a variável vazia); reinicie a API depois de mudar. O detalhe exato aparece no console do navegador (F12).`;
+    dica = `Sem resposta de ${onde}. Confira se a API está no ar (local: <code>npm run api:dev</code>) e se <code>${escapeHtml(location.origin)}</code> está em <code>CORS_ORIGINS</code>. Detalhes no console (F12).`;
   } else if (e?.status === 401) {
-    dica = `A API não aceitou o seu login. Confira se a service account (<code>FIREBASE_SERVICE_ACCOUNT</code> ou o <code>serviceAccount.json</code>) é do projeto <code>flora-5754a</code> — a mesma conta que entra aqui — e entre de novo no sistema.`;
+    dica = `A API recusou o login. A service account precisa ser do projeto <code>flora-5754a</code>.`;
   } else if (e?.status === 403) {
     dica = `Só administradores podem testar a conexão.`;
   } else if (!base) {
-    dica = `A URL da API está vazia, então procurei neste mesmo endereço e não há API aqui. Se a API está no seu computador, ative o <strong>“Teste só neste computador”</strong> logo abaixo (<code>http://localhost:3001</code>). Se está na Vercel, preencha a URL dela no campo acima.`;
+    dica = `Endereço vazio e não há API neste domínio. Preencha o endereço ou use o teste local.`;
   } else if (e?.status === 404) {
-    dica = `Não encontrei a rota de diagnóstico em ${onde}. Confira se essa é mesmo a URL da API do sistema e se a versão publicada é a mais nova.`;
+    dica = `Rota de diagnóstico não encontrada em ${onde}. Confira o endereço e a versão publicada.`;
   } else {
-    dica = `Confira a URL da API e se ela está no ar.`;
+    dica = `Confira o endereço da API e se ela está no ar.`;
   }
-  return `<p style="color:var(--err)">${escapeHtml(e?.message || "Falha ao consultar.")}</p><p class="muted">${dica}</p>`;
+  return `<div class="faixa erro">${icone("erro", { tam: 16 })}<div><strong>${escapeHtml(e?.message || "Falha ao consultar.")}</strong><div>${dica}</div></div></div>`;
 }
 
 async function testarConexao() {
-  const box = document.getElementById("point-terminais");
+  const box = $("#point-terminais");
   const base = baseDaApi();
-  box.innerHTML = `<p class="muted">Consultando ${base ? `<code>${escapeHtml(base)}</code>` : "a API deste site"}…</p>`;
+  const btn = $("#testar-point");
+  btn.classList.add("carregando");
+  btn.disabled = true;
+  box.innerHTML = "";
   try {
     const d = await clientePointDaTela().diagnostico();
-    // Um servidor qualquer (ex.: o proprio site devolvendo uma pagina) pode responder 200 sem ser a nossa API.
+    // Um servidor qualquer pode responder 200 sem ser a nossa API.
     if (!d || !Array.isArray(d.checks)) {
       throw Object.assign(new Error("A resposta não parece ser da API da maquininha."), { status: 404 });
     }
@@ -351,58 +373,61 @@ async function testarConexao() {
     box.querySelectorAll(".pt-modo").forEach((b) => {
       b.onclick = async () => {
         b.disabled = true;
+        b.classList.add("carregando");
         try {
           await clientePointDaTela().definirModo(b.dataset.id, b.dataset.modo);
           toast(b.dataset.modo === "PDV" ? "Maquininha em modo PDV." : "Maquininha em modo autônomo.", "ok");
           testarConexao();
         } catch (err) {
           b.disabled = false;
+          b.classList.remove("carregando");
           toast(err?.message || "Não foi possível trocar o modo.", "err");
         }
       };
     });
   } catch (e) {
     box.innerHTML = htmlFalha(e, base);
+  } finally {
+    btn.classList.remove("carregando");
+    btn.disabled = false;
   }
 }
-document.getElementById("testar-point").onclick = testarConexao;
+$("#testar-point").onclick = testarConexao;
 
 // ── Teste local (so neste navegador) ─────────────────────────────────────
 function atualizarStatusLocal() {
   const local = lerTesteLocal(storage);
-  document.getElementById("point-local-status").innerHTML = local
-    ? `<span class="tag ativo">ATIVO</span> Neste navegador, o PDV e as Vendas usam a API em <code>${escapeHtml(local.api_url)}</code>. Tem uma faixa amarela no PDV avisando.`
-    : `Desativado — este navegador usa a configuração do sistema (acima).`;
-  document.getElementById("point-local-desativar").disabled = !local;
-  if (local) document.getElementById("point-local-url").value = local.api_url;
+  $("#point-local-status").innerHTML = local ? `<span class="tag ativo">ativo neste navegador</span>` : "Desligado";
+  $("#point-local-desativar").disabled = !local;
+  if (local) $("#point-local-url").value = local.api_url;
 }
-document.getElementById("point-local-ativar").onclick = () => {
-  const r = ativarTesteLocal(storage, document.getElementById("point-local-url").value);
+$("#point-local-ativar").onclick = () => {
+  const r = ativarTesteLocal(storage, $("#point-local-url").value);
   if (!r.ok) return toast(r.erro, "err");
-  toast("Teste local ativado neste navegador.", "ok");
+  toast("Teste local ligado neste navegador.", "ok");
   atualizarStatusLocal();
 };
-document.getElementById("point-local-desativar").onclick = () => {
+$("#point-local-desativar").onclick = () => {
   desativarTesteLocal(storage);
-  toast("Teste local desativado.", "ok");
+  toast("Teste local desligado.", "ok");
   atualizarStatusLocal();
 };
 atualizarStatusLocal();
 
-document.getElementById("salvar-ind").onclick = async () => {
+// ── Indicadores ──────────────────────────────────────────────────────────
+const categorias = tagsInput($("#ind-cat"), ind.categorias_excluidas ?? ["iphones"], {
+  normalizar: (s) => s.trim().toLowerCase().replace(/,/g, ""),
+  placeholder: "slug da categoria + Enter",
+});
+botaoSalvar($("#salvar-ind"), async () => {
   await setDoc(
     doc(db, "configuracoes", "indicadores"),
     {
-      site_url: document.getElementById("ind-site").value.trim().replace(/\/+$/, ""),
-      percentual: parseNum(document.getElementById("ind-pct").value),
-      categorias_excluidas: document
-        .getElementById("ind-cat")
-        .value.split(",")
-        .map((s) => s.trim().toLowerCase())
-        .filter(Boolean),
+      site_url: $("#ind-site").value.trim().replace(/\/+$/, ""),
+      percentual: valorStepper($("#ind-pct")),
+      categorias_excluidas: categorias.valores(),
       atualizadoEm: serverTimestamp(),
     },
     { merge: true }
   );
-  toast("Configuracoes de indicadores salvas.", "ok");
-};
+});

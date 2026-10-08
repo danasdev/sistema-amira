@@ -109,8 +109,8 @@ root.innerHTML = `
       ${tituloCard("pdv", "Adicionar produtos")}
       ${caixaAbertoId ? "" : `<div class="faixa" style="margin-bottom:12px">${icone("aviso", { tam: 16 })}<div>Nenhum caixa aberto: pagamento em dinheiro fica bloqueado. <a href="/caixa">Abrir caixa</a></div></div>`}
       <div class="leitor">
-        <div class="leitor-rotulo">${icone("pdv", { tam: 18 })}<span>Leitor de código de barras</span><span class="leitor-estado" id="leitor-estado">pronto pra bipar</span></div>
-        <input id="bipar" placeholder="Clique aqui e bipe o produto" autocomplete="off" inputmode="numeric" aria-label="Código de barras">
+        <div class="leitor-rotulo">${icone("pdv", { tam: 18 })}<span>Leitor de código de barras</span><span class="leitor-estado" id="leitor-estado">pronto</span></div>
+        <input id="bipar" placeholder="Bipe o produto" autocomplete="off" inputmode="numeric" aria-label="Código de barras">
       </div>
       <label for="busca-prod">Ou procure na lista</label>
       <div class="campo-ic">${icone("busca", { tam: 18 })}<input id="busca-prod" placeholder="Nome ou código do produto" autocomplete="off"></div>
@@ -160,7 +160,6 @@ root.innerHTML = `
 
       <section class="card" aria-label="Pagamento">
         ${tituloCard("cartao", "Pagamento")}
-        <p class="dica" style="margin:-4px 0 10px">Toque na forma de pagamento. O valor que falta já vem preenchido; pra dividir, ajuste o valor e escolha outra forma.</p>
         <div class="formas" id="formas-rapidas">
           ${formas.map((f) => `<button class="forma-btn" data-forma="${escapeHtml(f)}">${iconeForma(f)}${escapeHtml(rotuloForma(f))}</button>`).join("")}
         </div>
@@ -187,8 +186,8 @@ $("#bipar").onkeydown = (e) => {
   bipar($("#bipar").value.trim());
   $("#bipar").value = "";
 };
-$("#bipar").onfocus = () => ($("#leitor-estado").textContent = "pronto pra bipar");
-$("#bipar").onblur = () => ($("#leitor-estado").textContent = "clique pra usar o leitor");
+$("#bipar").onfocus = () => ($("#leitor-estado").textContent = "pronto");
+$("#bipar").onblur = () => ($("#leitor-estado").textContent = "pausado");
 $("#desconto").oninput = renderTotais;
 $("#desconto").onchange = () => ($("#desconto").value = valorCampo(parseNum($("#desconto").value)));
 $("#desconto").onfocus = () => $("#desconto").select();

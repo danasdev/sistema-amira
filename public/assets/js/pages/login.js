@@ -6,18 +6,13 @@ else if (r && r.user) await sairSilencioso();
 
 document.getElementById("root").innerHTML = `
   <div class="login-wrap">
-    <div class="login-arte">
-      <img src="/assets/img/amira-logo.png" alt="Amira">
-      <p>Sistema interno da perfumaria</p>
-    </div>
     <div class="login-lado">
-      <form class="login-card" id="f" novalidate>
-        <h1>Entrar</h1>
-        <p>Acesso restrito à equipe da loja.</p>
-        <label for="email">E-mail</label>
-        <input type="email" id="email" required autocomplete="username" placeholder="voce@exemplo.com">
-        <label for="senha">Senha</label>
-        <input type="password" id="senha" required autocomplete="current-password">
+      <form class="login-card vidro" id="f" novalidate>
+        <span class="logo-marca" role="img" aria-label="Amira"></span>
+        <h1>Bem-vinda</h1>
+        <p>Entre com sua conta da equipe.</p>
+        <div class="flutua"><input type="email" id="email" required autocomplete="username" placeholder=" "><label for="email">E-mail</label></div>
+        <div class="flutua"><input type="password" id="senha" required autocomplete="current-password" placeholder=" "><label for="senha">Senha</label></div>
         <div id="erro" class="faixa erro" style="margin-top:14px;display:none" role="alert"></div>
         <button class="btn lg bloco" style="margin-top:20px" id="b">Entrar</button>
       </form>

@@ -43,7 +43,7 @@ export function initShell({ perfil, active, largo = false }) {
       <aside class="side">
         <input type="checkbox" id="nav-toggle" class="nav-toggle">
         <div class="brand">
-          <img class="brand-logo" src="/assets/img/amira-logo.png" alt="Amira">
+          <span class="brand-logo" role="img" aria-label="Amira"></span>
           <small>Sistema interno</small>
           <label for="nav-toggle" class="nav-toggle-btn" aria-label="Abrir menu">
             <span class="icone-abrir">${icone("menu", { tam: 22 })}</span><span class="icone-fechar">${icone("fechar", { tam: 22 })}</span>
