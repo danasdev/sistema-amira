@@ -544,3 +544,43 @@ passo a passo esta em "Conectar hoje".
   cobranca no carrinho pede confirmacao (perder o vinculo gera o caso acima).
 - Cancelar uma venda paga na maquininha estorna no cartao antes; se o estorno falhar a venda
   **nao** e cancelada.
+
+---
+
+## 11. Link de pagamento do crediario
+
+Cada cliente do crediario pode ter um **link de pagamento** (tela Clientes → comanda do cliente →
+**Criar link de pagamento**). O link abre `/conta?t=<token>`, uma pagina publica, sem login, que
+mostra a conta do cliente (comprado, pago, restante e historico) e deixa pagar:
+
+- **Pix**: QR code e copia-e-cola na propria pagina. A pagina confere sozinha e confirma em segundos.
+- **Cartao**: Checkout Pro do Mercado Pago (so cartao, a vista). O cliente volta pra pagina, que
+  confirma o pagamento.
+
+O pagamento aprovado vira um doc em `crediario_pagamentos` (origem `online`, id `mp_<paymentId>`,
+aplicado **uma vez so**, venha da pagina ou do webhook), soma em `clientes.total_pago` e entra no
+**caixa aberto**. Com o caixa fechado ele fica `aguardando_caixa` e o **proximo caixa aberto o
+assume** (a tela Caixa faz isso ao abrir).
+
+| Peca | Onde |
+|---|---|
+| Pagina publica | `public/conta.html` + `public/assets/js/pages/conta.js` (nao carrega o Firebase; so fala com `/api/conta/*`) |
+| API | `api/conta/{resumo,pagar,status}.js` + `api/webhook-conta.js`; logica em `api/_lib/conta-handlers.js` e `api/_lib/conta.js` (testes em `tests/conta-handlers.test.js`) |
+| Cobrancas | colecao `cobrancas_conta` (so Admin SDK) |
+| Link | `clientes.link_token` (32 caracteres aleatorios). **Gerar outro** invalida o anterior na hora |
+
+**Seguranca.** O token e o segredo do link: quem nao tem o link nao ve nada. A pagina so recebe o
+**primeiro nome**, os valores e os itens comprados (nada de telefone, CPF, endereco ou anotacoes).
+As rotas tem limite de requisicoes por token. A pagina usa `referrer: no-referrer` pra o token nao
+vazar pro Mercado Pago nem pro Google Fonts.
+
+**Onde mora.** A pagina precisa estar no **mesmo dominio da API** (a Vercel serve o `public/`
+inteiro). O link usa o endereco da API de Configuracoes → Maquininha; vazio = dominio do sistema.
+
+**Para funcionar em producao:**
+
+1. Publicar a API nova na Vercel (deploy da branch de producao).
+2. `firebase deploy --only firestore:rules` (regra que deixa o caixa assumir pagamento online).
+3. Nada a configurar no painel do MP: cada cobranca ja manda a propria `notification_url`
+   (`/api/webhook-conta`). Opcional: `CONTA_URL_BASE` na Vercel, se o dominio publico for outro.
+4. O Pix exige e-mail do pagador: cadastre o e-mail do cliente (opcional) ou a pagina pede.

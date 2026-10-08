@@ -647,9 +647,22 @@ service cloud.firestore {
         && request.resource.data.valor is number
         && request.resource.data.valor > 0
         && request.resource.data.status == 'ok';
-      allow update: if ehAdmin();
+      // Pagamento ONLINE que chegou com o caixa fechado fica
+      // aguardando_caixa == true; qualquer staff pode "assumi-lo" no caixa
+      // aberto (so esses dois campos, so pra um caixa que esta aberto).
+      allow update: if ehAdmin()
+        || (ehStaff()
+            && resource.data.aguardando_caixa == true
+            && request.resource.data.aguardando_caixa == false
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['caixa_id', 'aguardando_caixa'])
+            && request.resource.data.caixa_id is string
+            && get(/databases/$(database)/documents/caixa/$(request.resource.data.caixa_id)).data.status == 'aberto');
       allow delete: if false;
     }
+
+    // ── cobrancas_conta/{id} ──────────────────────────────────────────
+    // Cobrancas do link de pagamento do crediario (Pix/cartao). So o Admin
+    // SDK (api/_lib/conta-handlers.js) le e grava: cai no catch-all abaixo.
 
     // ── gastos/{id} ────────────────────────────────────────────────────
     // Despesas da loja (aluguel, fornecedor, salario, etc.) — SOLTAS por

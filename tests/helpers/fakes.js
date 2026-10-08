@@ -46,8 +46,25 @@ function criarFakeDb(inicial = {}) {
     }
   });
 
+  // Consulta minima (where ==, limit) no formato do Admin SDK:
+  // query.get() -> { empty, size, docs: [{ id, ref, data() }] }.
+  const consulta = (nome, filtros = [], max = Infinity) => ({
+    where: (campo, op, valor) => {
+      if (op !== "==") throw new Error(`fake: operador ${op} nao suportado`);
+      return consulta(nome, [...filtros, [campo, valor]], max);
+    },
+    limit: (n) => consulta(nome, filtros, n),
+    async get() {
+      const docs = [...col(nome).entries()]
+        .filter(([, d]) => filtros.every(([c, v]) => d[c] === v))
+        .slice(0, max)
+        .map(([id, d]) => ({ id, ref: ref(nome, id), exists: true, data: () => structuredClone(d) }));
+      return { empty: !docs.length, size: docs.length, docs };
+    }
+  });
+
   return {
-    collection: (nome) => ({ doc: (id) => ref(nome, id) }),
+    collection: (nome) => ({ doc: (id) => ref(nome, id), ...consulta(nome) }),
     // Dentro da transação o SDK real enfileira as escritas (síncronas).
     async runTransaction(fn) {
       const t = {

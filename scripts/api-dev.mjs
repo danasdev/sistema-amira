@@ -30,6 +30,10 @@ export const ROTAS_REAIS = {
   "/api/point/terminais": "api/point/terminais.js",
   "/api/point/diagnostico": "api/point/diagnostico.js",
   "/api/webhook-point": "api/webhook-point.js",
+  "/api/conta/resumo": "api/conta/resumo.js",
+  "/api/conta/pagar": "api/conta/pagar.js",
+  "/api/conta/status": "api/conta/status.js",
+  "/api/webhook-conta": "api/webhook-conta.js",
   "/api/imagekit-auth": "api/imagekit-auth.js"
 };
 

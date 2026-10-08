@@ -97,5 +97,23 @@ module.exports = {
 
   // Dono do access token (id, apelido, país). Serve pra provar que o token
   // é válido e de qual conta — usado só no diagnóstico.
-  usuarioAtual: () => mpFetch("/users/me")
+  usuarioAtual: () => mpFetch("/users/me"),
+
+  // ── Link de pagamento do crediário (api/conta/*) ──────────────────────
+  // Pix: pagamento direto em /v1/payments; a resposta traz o QR code e o
+  // copia-e-cola em point_of_interaction.transaction_data.
+  // https://www.mercadopago.com.br/developers/pt/docs/checkout-api/integration-configuration/integrate-pix
+  criarPagamento: (body, idempotencyKey) =>
+    mpFetch("/v1/payments", { method: "POST", body, idempotencyKey }),
+
+  // Cartão: preferência do Checkout Pro (o cliente paga na página do MP e
+  // volta pela back_url).
+  // https://www.mercadopago.com.br/developers/pt/docs/checkout-pro/overview
+  criarPreferencia: (body, idempotencyKey) =>
+    mpFetch("/checkout/preferences", { method: "POST", body, idempotencyKey }),
+
+  // Pagamentos de uma preferência (Checkout Pro não devolve o id do
+  // pagamento na criação — procuramos pela external_reference).
+  buscarPagamentosPorReferencia: (referencia) =>
+    mpFetch(`/v1/payments/search?sort=date_created&criteria=desc&limit=10&external_reference=${id(referencia)}`)
 };

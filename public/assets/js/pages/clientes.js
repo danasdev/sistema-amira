@@ -3,7 +3,7 @@ import { initShell, toast, modal, confirmar, escapeHtml, fmtData, erroCard, titu
 import { icone } from "../icons.js";
 import {
   db, collection, getDocs, query, where,
-  doc, runTransaction, serverTimestamp, increment, getConfigSistema,
+  doc, updateDoc, runTransaction, serverTimestamp, increment, getConfigSistema,
 } from "../db.js";
 import { brl, round2, parseNum, valorCampo } from "../money.js";
 import { saldoCliente } from "../crediario.js";
@@ -21,6 +21,9 @@ const root = initShell({ perfil, active: "clientes" });
 const ROTULO_FORMA = { dinheiro: "Dinheiro", pix: "Pix", debito: "Débito", credito: "Crédito", crediario: "Crediário" };
 let clientes = [];
 let formasPagamento = [];
+// Onde a pagina publica /conta mora: no mesmo dominio da API (Vercel), que
+// tambem serve o public/. Vazio = mesmo dominio deste sistema.
+let baseLink = location.origin;
 let busca = "";
 
 render();
@@ -29,6 +32,7 @@ async function render() {
   root.innerHTML = `<div class="card">Carregando...</div>`;
   try {
     const [lista, config] = await Promise.all([listarClientes(), getConfigSistema()]);
+    baseLink = (config.point?.api_url || "").replace(/\/+$/, "") || location.origin;
     clientes = lista;
     formasPagamento = (config.formas_pagamento?.length ? config.formas_pagamento : ["dinheiro", "pix", "debito", "credito"])
       .filter((f) => f !== "crediario");
@@ -150,6 +154,22 @@ function renderPerfil(c, vendas, pagamentos) {
     </div>
 
     <div class="card">
+      ${tituloCard("pedidos", "Link de pagamento")}
+      ${
+        c.link_token
+          ? `<div class="row" style="align-items:center;gap:8px">
+              <div class="campo-ic" style="min-width:240px">${icone("pedidos", { tam: 16 })}<input id="link-conta" readonly value="${escapeHtml(linkDaConta(c))}"></div>
+              <button class="btn sec" id="link-copiar">${icone("copiar", { tam: 16 })}Copiar</button>
+              <a class="btn" id="link-whats" target="_blank" rel="noopener" href="${escapeHtml(linkWhatsApp(c))}">${icone("mensagem", { tam: 16 })}Enviar no WhatsApp</a>
+              <button class="btn ghost" id="link-novo" title="Invalida o link atual">Gerar outro</button>
+            </div>
+            <p class="dica">O cliente vê a conta e paga por Pix ou cartão. O pagamento baixa a dívida sozinho e entra no caixa.</p>`
+          : `<p class="muted" style="margin-top:0">Crie um link pro cliente ver a conta e pagar por Pix ou cartão, sem vir à loja.</p>
+            <button class="btn" id="link-gerar">${icone("mais", { tam: 16 })}Criar link de pagamento</button>`
+      }
+    </div>
+
+    <div class="card">
       ${tituloCard("sacola", "Compras")}
       <div class="tabela-wrap"><table>
         <thead><tr><th>#</th><th>Data</th><th>Itens</th><th class="right">Total</th><th class="right">No crediario</th><th class="right">Pago na hora</th><th>Status</th></tr></thead>
@@ -183,7 +203,7 @@ function renderPerfil(c, vendas, pagamentos) {
               .map(
                 (p) => `<tr>
                   <td>${fmtData(p.data)}</td>
-                  <td>${p.origem === "pdv" ? `Pago na venda #${p.venda_numero ?? "-"}` : "Lançamento"}${p.observacoes ? `<div class="muted">${escapeHtml(p.observacoes)}</div>` : ""}</td>
+                  <td>${p.origem === "pdv" ? `Pago na venda #${p.venda_numero ?? "-"}` : p.origem === "online" ? `Pago pelo link${p.aguardando_caixa ? ` <span class="tag aviso">aguardando caixa</span>` : ""}` : "Lançamento"}${p.observacoes ? `<div class="muted">${escapeHtml(p.observacoes)}</div>` : ""}</td>
                   <td>${escapeHtml(ROTULO_FORMA[p.forma] || p.forma || "-")}</td>
                   <td>${escapeHtml(p.registrado_por_nome || "-")}</td>
                   <td class="right">${brl(p.valor)}</td>
@@ -202,9 +222,51 @@ function renderPerfil(c, vendas, pagamentos) {
   root.querySelector("#voltar").onclick = () => renderLista();
   root.querySelector("#editar").onclick = () => editarCliente(c, { perfil, onSalvo: recarregar });
   root.querySelector("#pagar").onclick = () => lancarPagamento(c, recarregar);
+  root.querySelector("#link-gerar")?.addEventListener("click", () => gerarLink(c, recarregar));
+  root.querySelector("#link-novo")?.addEventListener("click", async () => {
+    if (await confirmar("Gerar outro link? O link atual para de funcionar na hora.", { textoConfirmar: "Gerar outro" })) gerarLink(c, recarregar);
+  });
+  root.querySelector("#link-copiar")?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(linkDaConta(c));
+      const b = root.querySelector("#link-copiar");
+      b.innerHTML = `${icone("check", { tam: 16 })}Copiado`;
+      setTimeout(() => (b.innerHTML = `${icone("copiar", { tam: 16 })}Copiar`), 1600);
+    } catch (_) {
+      root.querySelector("#link-conta").select();
+      toast("Selecionei o link: copie com Ctrl+C.", "info");
+    }
+  });
   root.querySelectorAll(".estornar").forEach(
     (b) => (b.onclick = () => estornar(c, pagamentos.find((p) => p.id === b.dataset.id), recarregar))
   );
+}
+
+// ── Link de pagamento (pagina publica /conta) ────────────────────────────
+// O token e o segredo do link: 32 caracteres aleatorios (base64url), sem
+// relacao com o id do cliente. Trocar o token invalida o link antigo.
+function novoToken() {
+  const b = crypto.getRandomValues(new Uint8Array(24));
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+const linkDaConta = (c) => `${baseLink}/conta?t=${encodeURIComponent(c.link_token)}`;
+function linkWhatsApp(c) {
+  let fone = String(c.contato || "").replace(/\D/g, "");
+  if (fone && !fone.startsWith("55") && fone.length <= 11) fone = "55" + fone;
+  const { restante } = saldoCliente(c);
+  const msg = `Oi, ${String(c.nome || "").split(" ")[0]}! Aqui está o link da sua conta na Amira${restante > 0 ? ` (em aberto: ${brl(restante)})` : ""}. Por ele você vê suas compras e pode pagar por Pix ou cartão: ${linkDaConta(c)}`;
+  return `https://wa.me/${fone}?text=${encodeURIComponent(msg)}`;
+}
+async function gerarLink(c, depois) {
+  const token = novoToken();
+  try {
+    await updateDoc(doc(db, "clientes", c.id), { link_token: token, link_criado_em: serverTimestamp(), atualizado_em: serverTimestamp() });
+    c.link_token = token;
+    toast("Link de pagamento pronto.", "ok");
+    depois?.();
+  } catch (e) {
+    toast(e?.message || "Não foi possível criar o link.", "err");
+  }
 }
 
 // ── Lancar / estornar pagamento ──────────────────────────────────────────

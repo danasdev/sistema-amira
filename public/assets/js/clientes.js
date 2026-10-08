@@ -26,8 +26,9 @@ export function editarCliente(c, { perfil, onSalvo } = {}) {
   corpo.innerHTML = `
     <label for="c-nome">Nome completo</label><input id="c-nome" value="${escapeHtml(c?.nome || "")}" autocomplete="off">
     <label for="c-contato">Telefone / WhatsApp</label><input id="c-contato" value="${escapeHtml(c?.contato || "")}" inputmode="tel" placeholder="(11) 90000-0000" autocomplete="off">
-    <details class="mais" ${c?.cpf || c?.endereco || c?.observacoes ? "open" : ""}>
-      <summary>CPF, endereço e observações <span class="opc">(opcional)</span></summary>
+    <details class="mais" ${c?.cpf || c?.email || c?.endereco || c?.observacoes ? "open" : ""}>
+      <summary>E-mail, CPF, endereço e observações <span class="opc">(opcional)</span></summary>
+      <label for="c-email">E-mail <span class="opc">· pro comprovante do Pix no link de pagamento</span></label><input id="c-email" type="email" value="${escapeHtml(c?.email || "")}" placeholder="cliente@exemplo.com" autocomplete="off">
       <label for="c-cpf">CPF</label><input id="c-cpf" value="${escapeHtml(c?.cpf || "")}" inputmode="numeric" placeholder="000.000.000-00">
       <label for="c-endereco">Endereço</label><input id="c-endereco" value="${escapeHtml(c?.endereco || "")}">
       <label for="c-obs">Observações</label>
@@ -42,6 +43,7 @@ export function editarCliente(c, { perfil, onSalvo } = {}) {
         nome: corpo.querySelector("#c-nome").value.trim(),
         contato: corpo.querySelector("#c-contato").value.trim(),
         cpf: corpo.querySelector("#c-cpf").value.trim(),
+        email: corpo.querySelector("#c-email").value.trim().toLowerCase(),
         endereco: corpo.querySelector("#c-endereco").value.trim(),
         observacoes: corpo.querySelector("#c-obs").value.trim(),
       };
