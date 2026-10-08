@@ -1,6 +1,6 @@
 import { requireAuth, criarVendedor } from "../auth.js";
 import { initShell, toast, modal, escapeHtml } from "../ui.js";
-import { db, collection, getDocs, query, orderBy, doc, updateDoc } from "../db.js";
+import { db, collection, getDocs, query, where, doc, updateDoc } from "../db.js";
 import { parseNum } from "../money.js";
 
 const BASES = ["total", "total_sem_desconto", "margem"];
@@ -13,10 +13,12 @@ carregar();
 async function carregar() {
   root.innerHTML = `<div class="card">Carregando...</div>`;
   // A colecao `usuarios` e compartilhada com o site (clientes da loja tem
-  // role "cliente"). Aqui so interessa a equipe do sistema interno.
-  const us = (await getDocs(query(collection(db, "usuarios"), orderBy("nome")))).docs
+  // role "cliente"). Aqui so interessa a equipe — o filtro vai na consulta,
+  // senao cada abertura da tela lia TODOS os clientes da loja. Ordena em
+  // memoria (orderBy("nome") junto exigiria indice composto).
+  const us = (await getDocs(query(collection(db, "usuarios"), where("role", "in", ["admin", "vendedor"])))).docs
     .map((d) => ({ id: d.id, ...d.data() }))
-    .filter((u) => u.role === "admin" || u.role === "vendedor");
+    .sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR"));
 
   root.innerHTML = `
     <div class="card"><button class="btn" id="novo">+ Novo vendedor</button></div>

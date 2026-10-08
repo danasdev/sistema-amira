@@ -35,6 +35,8 @@ rules_version = '2';
 //  2026-10-08: `configuracoes/sistema` e `/indicadores` deixaram de ser
 //  publicos (so staff le). Mesma mudanca copiada para o repo do site, que
 //  agora guarda uma copia IDENTICA deste arquivo.
+//
+//  2026-10-08 (2): nova colecao `custos` (preco de custo, so admin).
 // =============================================================================
 
 service cloud.firestore {
@@ -647,6 +649,15 @@ service cloud.firestore {
         request.resource.data.valor > 0 &&
         request.resource.data.data is timestamp;
       allow delete: if ehAdmin();
+    }
+
+    // ── custos/{doc} ─────────────────────────────────────────────────
+    // Preço de CUSTO dos produtos (custos/produtos = { valores: {produtoId:
+    // custo} }), usado no montante do estoque da tela Produtos. Fica fora de
+    // `produtos` de propósito: aquela coleção é pública (o site lê sem
+    // login) e o custo não pode vazar. Só admin lê e grava.
+    match /custos/{doc} {
+      allow read, write: if ehAdmin();
     }
 
     // ── integracoes/{doc=**} ─────────────────────────────────────────

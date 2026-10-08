@@ -17,7 +17,10 @@ let periodo = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2,
 // mapa uid -> nome
 const vendedores = {};
 if (ehAdm) {
-  (await getDocs(collection(db, "usuarios"))).forEach((d) => (vendedores[d.id] = d.data().nome || d.id));
+  // So a equipe: `usuarios` tambem guarda TODOS os clientes do site, e ler
+  // a colecao inteira so para achar os vendedores crescia com a loja.
+  (await getDocs(query(collection(db, "usuarios"), where("role", "in", ["admin", "vendedor"]))))
+    .forEach((d) => (vendedores[d.id] = d.data().nome || d.id));
 } else {
   vendedores[perfil.id] = perfil.nome || perfil.id;
 }

@@ -7,6 +7,7 @@ import {
 } from "../db.js";
 import { brl, round2 } from "../money.js";
 import { derivarItensPedido, contaComoPago } from "../produtos-schema.js";
+import { mapaDoCatalogo } from "../catalogo-cache.js";
 import { criarClientePoint, configPointEfetiva, storageSeguro } from "../point.js";
 
 const CANAIS = { loja: "Loja fisica", site: "Site proprio", mercado_livre: "Mercado Livre", shopee: "Shopee" };
@@ -123,11 +124,11 @@ async function carregar() {
 // o detalhamento por indicador fica na pagina Indicadores (so admin).
 async function carregarTotalIndicadores(lista) {
   try {
-    const [pedidosSnap, produtosSnap] = await Promise.all([
+    // Catalogo do cache da aba (so preco) em vez de reler os ~200 produtos.
+    const [pedidosSnap, produtosMap] = await Promise.all([
       getDocs(query(collection(db, "pedidos"), where("ref", "!=", ""))),
-      getDocs(collection(db, "produtos")),
+      mapaDoCatalogo(),
     ]);
-    const produtosMap = new Map(produtosSnap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
     const pedidos = pedidosSnap.docs
       .map((d) => ({ id: d.id, ...d.data() }))
       .filter((p) => contaComoPago(p.status));
