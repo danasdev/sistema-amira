@@ -24,14 +24,18 @@ export async function listarClientes() {
 export function editarCliente(c, { perfil, onSalvo } = {}) {
   const corpo = document.createElement("div");
   corpo.innerHTML = `
-    <label>Nome</label><input id="c-nome" value="${escapeHtml(c?.nome || "")}">
-    <label>Contato (telefone / WhatsApp)</label><input id="c-contato" value="${escapeHtml(c?.contato || "")}">
-    <label>CPF (opcional)</label><input id="c-cpf" value="${escapeHtml(c?.cpf || "")}" inputmode="numeric">
-    <label>Endereco (opcional)</label><input id="c-endereco" value="${escapeHtml(c?.endereco || "")}">
-    <label>Observacoes (opcional)</label>
-    <textarea id="c-obs" rows="3">${escapeHtml(c?.observacoes || "")}</textarea>`;
+    <label for="c-nome">Nome completo</label><input id="c-nome" value="${escapeHtml(c?.nome || "")}" autocomplete="off">
+    <label for="c-contato">Telefone / WhatsApp</label><input id="c-contato" value="${escapeHtml(c?.contato || "")}" inputmode="tel" placeholder="(11) 90000-0000" autocomplete="off">
+    <details class="mais" ${c?.cpf || c?.endereco || c?.observacoes ? "open" : ""}>
+      <summary>CPF, endereço e observações <span class="opc">(opcional)</span></summary>
+      <label for="c-cpf">CPF</label><input id="c-cpf" value="${escapeHtml(c?.cpf || "")}" inputmode="numeric" placeholder="000.000.000-00">
+      <label for="c-endereco">Endereço</label><input id="c-endereco" value="${escapeHtml(c?.endereco || "")}">
+      <label for="c-obs">Observações</label>
+      <textarea id="c-obs" rows="3" placeholder="Ex.: paga todo dia 10">${escapeHtml(c?.observacoes || "")}</textarea>
+    </details>`;
   modal({
     titulo: c ? "Editar cliente" : "Novo cliente",
+    textoConfirmar: c ? "Salvar" : "Cadastrar cliente",
     corpo,
     onConfirmar: async () => {
       const dados = {
@@ -42,7 +46,7 @@ export function editarCliente(c, { perfil, onSalvo } = {}) {
         observacoes: corpo.querySelector("#c-obs").value.trim(),
       };
       if (!dados.nome || !dados.contato) {
-        toast("Nome e contato sao obrigatorios.", "err");
+        toast("Preencha o nome e o telefone do cliente.", "err");
         return false;
       }
       if (c) {

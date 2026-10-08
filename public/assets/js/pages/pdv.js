@@ -1,11 +1,12 @@
 import { requireAuth } from "../auth.js";
 import { auth } from "../firebase.js";
-import { initShell, toast, confirmar, escapeHtml, erroCard } from "../ui.js";
+import { initShell, toast, confirmar, escapeHtml, erroCard, tituloCard, vazio } from "../ui.js";
+import { icone } from "../icons.js";
 import {
   db, collection, getDocs, query, where,
   doc, runTransaction, serverTimestamp, getConfigSistema, increment,
 } from "../db.js";
-import { brl, round2, parseNum } from "../money.js";
+import { brl, round2, parseNum, valorCampo } from "../money.js";
 import { calcularComissao } from "../regras.js";
 import { infoPreco, estoquePorModo } from "../produtos-schema.js";
 import { invalidarCatalogo } from "../catalogo-cache.js";
@@ -19,7 +20,7 @@ import { dividaDoCrediario } from "../crediario.js";
 import { editarCliente, listarClientes } from "../clientes.js";
 
 const { perfil } = await requireAuth();
-const root = initShell({ perfil, active: "pdv" });
+const root = initShell({ perfil, active: "pdv", largo: true });
 root.innerHTML = `<div class="card">Carregando...</div>`;
 
 try {
@@ -83,6 +84,18 @@ const estoqueDe = (p) => estoquePorModo(p);
 
 let carrinho = [];
 let pagamentos = [];
+let ultimoAdicionado = null; // realce do item que acabou de entrar na sacola
+let qtdAnterior = 0;
+
+const FORMA_INFO = {
+  dinheiro: { rotulo: "Dinheiro", ic: "dinheiro" },
+  pix: { rotulo: "Pix", ic: "pix" },
+  debito: { rotulo: "Débito", ic: "debito" },
+  credito: { rotulo: "Crédito", ic: "cartao" },
+  crediario: { rotulo: "Crediário", ic: "crediario" },
+};
+const rotuloForma = (f) => FORMA_INFO[f]?.rotulo || f;
+const iconeForma = (f) => icone(FORMA_INFO[f]?.ic || "cartao", { tam: 18 });
 
 root.innerHTML = `
   ${pointCfg.testeLocal ? `
@@ -91,42 +104,76 @@ root.innerHTML = `
     As vendas feitas aqui são <strong>reais</strong>: gravam no sistema e baixam o estoque.</div>
     <button class="btn ghost" id="pt-local-off">Desativar teste local</button>
   </div>` : ""}
-  <div class="grid auto">
-    <div class="card">
-      <strong>Produtos</strong>
-      ${caixaAbertoId ? "" : `<p style="color:var(--warn)">Nenhum caixa aberto &mdash; vendas em dinheiro ficam bloqueadas. <a href="/caixa">Abrir caixa</a></p>`}
-      <label style="margin-top:8px">Bipar codigo de barras</label>
-      <input id="bipar" placeholder="Encoste o leitor e bipe o produto" autocomplete="off" inputmode="numeric">
-      <input id="busca-prod" placeholder="Ou buscar por nome / codigo" style="margin-top:8px">
-      <div id="resultados" style="margin-top:10px;max-height:58vh;overflow:auto"></div>
-    </div>
-    <div class="card">
-      <strong>Venda</strong>
-      <label>Cliente cadastrado <span class="muted" style="text-transform:none">(obrigatorio no crediario)</span></label>
-      <div class="row" style="flex-wrap:nowrap">
-        <select id="cliente-perfil"></select>
-        <button class="btn ghost" id="novo-cliente" style="flex:0 0 auto">+ Novo</button>
+  <div class="pdv">
+    <section class="card pdv-produtos" aria-label="Adicionar produtos">
+      ${tituloCard("pdv", "Adicionar produtos")}
+      ${caixaAbertoId ? "" : `<div class="faixa" style="margin-bottom:12px">${icone("aviso", { tam: 16 })}<div>Nenhum caixa aberto: pagamento em dinheiro fica bloqueado. <a href="/caixa">Abrir caixa</a></div></div>`}
+      <div class="leitor">
+        <div class="leitor-rotulo">${icone("pdv", { tam: 18 })}<span>Leitor de código de barras</span><span class="leitor-estado" id="leitor-estado">pronto pra bipar</span></div>
+        <input id="bipar" placeholder="Clique aqui e bipe o produto" autocomplete="off" inputmode="numeric" aria-label="Código de barras">
       </div>
-      <label>Cliente</label><input id="cliente" placeholder="Nome do cliente" required>
-      <label>Contato</label><input id="cliente-contato" placeholder="Telefone / WhatsApp" required>
-      ${indicadores.length ? `
-      <label>Indicador (opcional)</label>
-      <select id="indicador">
-        <option value="">Sem indicador</option>
-        ${indicadores.map((r) => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.nome || r.codigo)} (${escapeHtml(r.codigo)})</option>`).join("")}
-      </select>` : ""}
-      <label>Observacoes (opcional)</label>
-      <textarea id="observacoes" rows="2" placeholder="Ex.: embrulho pra presente, retirar as 18h..."></textarea>
-      <div id="cart" style="margin-top:10px"></div>
-      <label>Desconto (R$)</label><input id="desconto" value="0" inputmode="decimal">
-      <label>Pagamentos</label>
-      <div id="pags"></div>
-      <button class="btn ghost" id="add-pag" style="margin-top:6px">+ Forma de pagamento</button>
-      <div id="totais" style="margin-top:12px"></div>
-      <div class="row" style="margin-top:14px">
-        <button class="btn" id="finalizar">Finalizar venda</button>
-        <button class="btn ghost" id="limpar">Limpar</button>
+      <label for="busca-prod">Ou procure na lista</label>
+      <div class="campo-ic">${icone("busca", { tam: 18 })}<input id="busca-prod" placeholder="Nome ou código do produto" autocomplete="off"></div>
+      <div id="resultados" class="prod-lista"></div>
+    </section>
+
+    <section class="card pdv-sacola" aria-label="Sacola da venda">
+      <div class="sacola-head">
+        <h2>${icone("sacola", { tam: 22 })}Sacola</h2>
+        <span class="contador vazio-c" id="contador" aria-label="Itens na sacola">0</span>
       </div>
+      <div class="sacola-itens" id="cart"></div>
+      <div class="sacola-pe">
+        <div class="desc-linha"><span>Subtotal</span><strong class="num" id="sacola-sub">R$ 0,00</strong></div>
+        <div class="desc-linha" style="margin-top:8px">
+          <label for="desconto" style="margin:0">Desconto</label>
+          <div class="campo-rs"><input id="desconto" value="0,00" inputmode="decimal"></div>
+        </div>
+        <div class="sacola-total"><span>Total da sacola</span><span id="sacola-total">R$ 0,00</span></div>
+      </div>
+    </section>
+
+    <div class="pdv-checkout">
+      <section class="card" aria-label="Cliente">
+        ${tituloCard("usuario", "Cliente")}
+        <label for="cliente-perfil" style="margin-top:0">Cliente cadastrado <span class="opc">· obrigatório no crediário</span></label>
+        <div class="row" style="flex-wrap:nowrap;gap:8px">
+          <select id="cliente-perfil"></select>
+          <button class="btn sec" id="novo-cliente" style="flex:0 0 auto">${icone("novoUsuario", { tam: 16 })}Novo</button>
+        </div>
+        <div class="row" style="gap:10px">
+          <div><label for="cliente">Nome</label><input id="cliente" placeholder="Nome do cliente" autocomplete="off" required></div>
+          <div><label for="cliente-contato">Contato</label><input id="cliente-contato" placeholder="Telefone / WhatsApp" autocomplete="off" required></div>
+        </div>
+        <details class="mais">
+          <summary>${indicadores.length ? "Indicador e observações" : "Observações"} <span class="opc">(opcional)</span></summary>
+          ${indicadores.length ? `
+          <label for="indicador">Indicador</label>
+          <select id="indicador">
+            <option value="">Sem indicador</option>
+            ${indicadores.map((r) => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.nome || r.codigo)} (${escapeHtml(r.codigo)})</option>`).join("")}
+          </select>` : ""}
+          <label for="observacoes">Observações</label>
+          <textarea id="observacoes" rows="2" placeholder="Ex.: embrulho pra presente, retirar às 18h..."></textarea>
+        </details>
+      </section>
+
+      <section class="card" aria-label="Pagamento">
+        ${tituloCard("cartao", "Pagamento")}
+        <p class="dica" style="margin:-4px 0 10px">Toque na forma de pagamento. O valor que falta já vem preenchido; pra dividir, ajuste o valor e escolha outra forma.</p>
+        <div class="formas" id="formas-rapidas">
+          ${formas.map((f) => `<button class="forma-btn" data-forma="${escapeHtml(f)}">${iconeForma(f)}${escapeHtml(rotuloForma(f))}</button>`).join("")}
+        </div>
+        <div id="pags"></div>
+      </section>
+
+      <section class="card resumo" aria-label="Resumo da venda">
+        <div id="totais"></div>
+        <div class="acoes">
+          <button class="btn lg" id="finalizar">${icone("check", { tam: 20 })}Finalizar venda</button>
+          <button class="btn ghost lg" id="limpar" title="Esvaziar a venda">${icone("lixo", { tam: 18 })}Limpar</button>
+        </div>
+      </section>
     </div>
   </div>`;
 
@@ -140,13 +187,12 @@ $("#bipar").onkeydown = (e) => {
   bipar($("#bipar").value.trim());
   $("#bipar").value = "";
 };
+$("#bipar").onfocus = () => ($("#leitor-estado").textContent = "pronto pra bipar");
+$("#bipar").onblur = () => ($("#leitor-estado").textContent = "clique pra usar o leitor");
 $("#desconto").oninput = renderTotais;
-$("#add-pag").onclick = () => {
-  const { total, pago } = calc();
-  pagamentos.push({ forma: formas[0], valor: round2(Math.max(0, total - pago)), parcelas: 1 });
-  renderPags();
-  renderTotais();
-};
+$("#desconto").onchange = () => ($("#desconto").value = valorCampo(parseNum($("#desconto").value)));
+$("#desconto").onfocus = () => $("#desconto").select();
+root.querySelectorAll(".forma-btn").forEach((b) => (b.onclick = () => adicionarPagamento(b.dataset.forma)));
 $("#limpar").onclick = limpar;
 $("#cliente-perfil").onchange = aplicarClientePerfil;
 $("#novo-cliente").onclick = () =>
@@ -203,6 +249,20 @@ window.addEventListener("beforeunload", (e) => {
   }
 });
 
+function adicionarPagamento(forma) {
+  if (!carrinho.length) return toast("Adicione produtos na sacola antes de escolher o pagamento.", "warn");
+  const { total, pago } = calc();
+  const falta = round2(Math.max(0, total - pago));
+  if (falta <= 0 && pagamentos.length)
+    return toast("O valor da venda já está todo distribuído. Ajuste um valor antes de adicionar outra forma.", "info");
+  pagamentos.push({ forma, valor: falta, parcelas: 1 });
+  renderPags();
+  renderTotais();
+  // foco no valor da forma recem-adicionada (pra dividir o pagamento)
+  const inputs = $("#pags").querySelectorAll(".pv");
+  inputs[inputs.length - 1]?.select();
+}
+
 function renderResultados() {
   const termo = $("#busca-prod").value.toLowerCase().trim();
   const lista = produtos
@@ -216,25 +276,31 @@ function renderResultados() {
     .slice(0, 40);
   $("#resultados").innerHTML =
     lista
-      .map(
-        (p) => `<div class="cart-line">
-          <div class="nm">
-            <div>${escapeHtml(p.nome)}</div>
-            <div class="muted">${escapeHtml(p.codigoBarras || p.sku || "")} &middot; ${brl(precoDe(p))} &middot; estoque ${estoqueDe(p)}</div>
-          </div>
-          <button class="btn sec add" data-id="${p.id}" ${estoqueDe(p) <= 0 ? "disabled" : ""}>Add</button>
-        </div>`
-      )
-      .join("") || `<p class="muted">Nada encontrado.</p>`;
+      .map((p) => {
+        const est = estoqueDe(p);
+        const estTxt = est <= 0 ? `<span class="estoque-baixo">sem estoque</span>` : est <= 3 ? `<span class="estoque-baixo">só ${est} em estoque</span>` : `<span>${est} em estoque</span>`;
+        return `<button class="prod add" data-id="${p.id}" ${est <= 0 ? "disabled" : ""} title="Adicionar à sacola">
+          <span class="p-info">
+            <span class="p-nome">${escapeHtml(p.nome)}</span>
+            <span class="p-meta"><span>${escapeHtml(p.codigoBarras || p.sku || "sem código")}</span>${estTxt}</span>
+          </span>
+          <span class="p-preco">${brl(precoDe(p))}</span>
+          <span class="p-add">${icone("mais", { tam: 18 })}</span>
+        </button>`;
+      })
+      .join("") || vazio("busca", "Nenhum produto encontrado", "Confira o nome ou o código. Produtos inativos não aparecem aqui.");
   $("#resultados")
     .querySelectorAll(".add")
-    .forEach((b) => (b.onclick = () => addItem(b.dataset.id)));
+    .forEach((b) => (b.onclick = () => {
+      addItem(b.dataset.id);
+      $("#bipar").focus();
+    }));
 }
 
 function bipar(codigo) {
   if (!codigo) return;
   const p = produtos.find((x) => (x.codigoBarras || "") === codigo);
-  if (!p) return toast(`Codigo ${codigo} nao encontrado (produto inativo?).`, "warn");
+  if (!p) return toast(`Código ${codigo} não encontrado. O produto pode estar inativo ou sem código cadastrado.`, "warn");
   addItem(p.id);
   $("#bipar").focus();
 }
@@ -243,7 +309,8 @@ function addItem(id) {
   const p = produtos.find((x) => x.id === id);
   const linha = carrinho.find((l) => l.produtoId === id);
   const qAtual = linha ? linha.qtd : 0;
-  if (qAtual + 1 > estoqueDe(p)) return toast("Estoque insuficiente.", "warn");
+  if (qAtual + 1 > estoqueDe(p)) return toast(`Estoque insuficiente de ${p.nome} (tem ${estoqueDe(p)}).`, "warn");
+  ultimoAdicionado = id;
   if (linha) linha.qtd++;
   else
     carrinho.push({
@@ -260,44 +327,62 @@ function addItem(id) {
 }
 
 function renderCart() {
+  const qtdItens = carrinho.reduce((s, l) => s + l.qtd, 0);
+  const cont = $("#contador");
+  cont.textContent = qtdItens;
+  cont.classList.toggle("vazio-c", !qtdItens);
+  cont.setAttribute("aria-label", `${qtdItens} ${qtdItens === 1 ? "item" : "itens"} na sacola`);
+  if (qtdItens > qtdAnterior) {
+    cont.classList.remove("pulou");
+    void cont.offsetWidth; // reinicia a animacao
+    cont.classList.add("pulou");
+  }
+  qtdAnterior = qtdItens;
+
   $("#cart").innerHTML =
     carrinho
       .map(
-        (l, i) => `<div class="cart-line">
-          <div class="nm">${escapeHtml(l.nome)}<div class="muted">${brl(l.preco_unit)}</div></div>
-          <input type="number" min="1" value="${l.qtd}" data-i="${i}" class="q">
-          <div style="width:84px;text-align:right">${brl(l.preco_unit * l.qtd)}</div>
-          <button class="btn ghost rm" data-i="${i}">&times;</button>
+        (l, i) => `<div class="item ${l.produtoId === ultimoAdicionado ? "novo" : ""}">
+          <div>
+            <div class="i-nome">${escapeHtml(l.nome)}</div>
+            <div class="i-unit">${brl(l.preco_unit)} cada</div>
+          </div>
+          <div class="qtd">
+            <button class="menos" data-i="${i}" aria-label="Diminuir quantidade">${icone("menos", { tam: 14 })}</button>
+            <input type="number" min="1" value="${l.qtd}" data-i="${i}" class="q" aria-label="Quantidade">
+            <button class="mais" data-i="${i}" aria-label="Aumentar quantidade">${icone("mais", { tam: 14 })}</button>
+          </div>
+          <div class="i-total">${brl(l.preco_unit * l.qtd)}</div>
+          <button class="rm" data-i="${i}" aria-label="Tirar ${escapeHtml(l.nome)} da sacola" title="Tirar da sacola">${icone("lixo", { tam: 16 })}</button>
         </div>`
       )
-      .join("") || `<p class="muted">Carrinho vazio.</p>`;
+      .join("") || vazio("sacola", "A sacola está vazia", "Bipe um produto ou procure pelo nome pra começar a venda.");
+  ultimoAdicionado = null;
 
-  $("#cart")
-    .querySelectorAll(".q")
-    .forEach((inp) => {
-      inp.onchange = () => {
-        const i = +inp.dataset.i;
-        const q = Math.max(1, Math.trunc(+inp.value || 1));
-        const p = produtos.find((x) => x.id === carrinho[i].produtoId);
-        if (q > estoqueDe(p)) {
-          toast("Estoque insuficiente.", "warn");
-          inp.value = carrinho[i].qtd;
-          return;
-        }
-        carrinho[i].qtd = q;
-        renderCart();
-        renderTotais();
-      };
-    });
-  $("#cart")
-    .querySelectorAll(".rm")
-    .forEach((b) => {
-      b.onclick = () => {
-        carrinho.splice(+b.dataset.i, 1);
-        renderCart();
-        renderTotais();
-      };
-    });
+  const mudarQtd = (i, q) => {
+    const p = produtos.find((x) => x.id === carrinho[i].produtoId);
+    if (q > estoqueDe(p)) {
+      toast(`Estoque insuficiente de ${carrinho[i].nome} (tem ${estoqueDe(p)}).`, "warn");
+      renderCart();
+      return;
+    }
+    if (q < 1) return;
+    carrinho[i].qtd = q;
+    renderCart();
+    renderTotais();
+  };
+  $("#cart").querySelectorAll(".q").forEach((inp) => {
+    inp.onchange = () => mudarQtd(+inp.dataset.i, Math.max(1, Math.trunc(+inp.value || 1)));
+  });
+  $("#cart").querySelectorAll(".mais").forEach((b) => (b.onclick = () => mudarQtd(+b.dataset.i, carrinho[+b.dataset.i].qtd + 1)));
+  $("#cart").querySelectorAll(".menos").forEach((b) => (b.onclick = () => mudarQtd(+b.dataset.i, carrinho[+b.dataset.i].qtd - 1)));
+  $("#cart").querySelectorAll(".rm").forEach((b) => {
+    b.onclick = () => {
+      carrinho.splice(+b.dataset.i, 1);
+      renderCart();
+      renderTotais();
+    };
+  });
 }
 
 function renderPags() {
@@ -317,7 +402,8 @@ function renderPags() {
         const numParcelas = opcoes.includes(pg.parcelas) ? pg.parcelas : 1;
         if (!pt) pg.parcelas = numParcelas;
         linhaParcelas = `
-          <div class="cart-line">
+          <div>
+            <label style="margin-top:0">Parcelas</label>
             <select data-i="${i}" class="pp" ${travado}>
               ${opcoes
                 .map((n) => {
@@ -344,8 +430,8 @@ function renderPags() {
               `cliente: ${pctCliente ? `+${pctCliente}% (total ${brl(valorComJuros)})` : "sem juros"}`,
               `loja: ${pctLoja ? `-${pctLoja}% (${brl(custoLoja)} de custo)` : "sem custo"}`,
             ].filter(Boolean)
-          : [`sem taxa configurada pra ${pg.forma}${parcelavel ? ` em ${pg.parcelas}x` : ""} — ajuste em Configuracoes`];
-        linhaTaxa = `<p class="muted" style="margin:2px 0 8px;font-size:12px">${partes.join(" &middot; ")}</p>`;
+          : [`sem taxa configurada pra ${rotuloForma(pg.forma)}${parcelavel ? ` em ${pg.parcelas}x` : ""} — ajuste em Configurações`];
+        linhaTaxa = `<p class="pag-info">${partes.join(" &middot; ")}</p>`;
       }
       // Botao/estado da maquininha (so credito e debito, e so com Point ligado).
       let linhaPoint = "";
@@ -358,12 +444,12 @@ function renderPags() {
           </div>`;
         } else if (pt) {
           linhaPoint = `<div class="pt-linha">
-            <span class="pt-pend">Cobranca em andamento na maquininha</span>
+            <span class="pt-pend">Cobrança em andamento na maquininha</span>
             <button class="btn ghost pt-acompanhar" data-i="${i}">Acompanhar</button>
           </div>`;
         } else {
           linhaPoint = `<div class="pt-linha">
-            <button class="btn sec pt-cobrar" data-i="${i}" ${pg.valor > 0 ? "" : "disabled"}>Cobrar na maquininha</button>
+            <button class="btn sec pt-cobrar" data-i="${i}" ${pg.valor > 0 ? "" : "disabled"}>${icone("cartao", { tam: 16 })}Cobrar na maquininha</button>
           </div>`;
         }
       }
@@ -374,37 +460,29 @@ function renderPags() {
         const divida = dividaDoCrediario(pagamentosComJuros([pg])[0]);
         const entrada = Math.min(pg.entrada || 0, divida);
         linhaCrediario = `
-          <div class="cart-line" style="align-items:end">
-            <div style="flex:1"><label style="margin-top:0">Valor de parcela paga</label>
-              <input class="pent" data-i="${i}" value="${pg.entrada || 0}" inputmode="decimal"></div>
-            <div style="flex:1"><label style="margin-top:0">Pago em</label>
-              <select class="pentf" data-i="${i}">${formasEntrada
-                .map((f) => `<option ${f === formaEntradaDe(pg) ? "selected" : ""}>${f}</option>`)
-                .join("")}</select></div>
-          </div>
-          <p class="muted" style="margin:2px 0 8px;font-size:12px">Vai pro caixa: ${brl(entrada)} &middot; fica devendo: <strong>${brl(round2(divida - entrada))}</strong></p>`;
+          <div class="crediario-box">
+            <div class="row" style="gap:10px">
+              <div><label style="margin-top:0">Valor de parcela paga</label>
+                <div class="campo-rs"><input class="pent" data-i="${i}" value="${valorCampo(pg.entrada || 0)}" inputmode="decimal"></div></div>
+              <div><label style="margin-top:0">Pago em</label>
+                <select class="pentf" data-i="${i}">${formasEntrada
+                  .map((f) => `<option value="${escapeHtml(f)}" ${f === formaEntradaDe(pg) ? "selected" : ""}>${escapeHtml(rotuloForma(f))}</option>`)
+                  .join("")}</select></div>
+            </div>
+            <p class="pag-info">Vai pro caixa agora: <strong>${brl(entrada)}</strong> &middot; fica na conta do cliente: <strong>${brl(round2(divida - entrada))}</strong></p>
+          </div>`;
       }
-      return `<div class="cart-line">
-        <select data-i="${i}" class="pf" ${travado}>${formas
-          .map((f) => `<option ${f === pg.forma ? "selected" : ""}>${f}</option>`)
-          .join("")}</select>
-        <input class="pv" data-i="${i}" value="${pg.valor}" inputmode="decimal" style="width:120px" ${travado}>
-        <button class="btn ghost prm" data-i="${i}" ${travado}>&times;</button>
-      </div>${linhaParcelas}${linhaPoint}${linhaTaxa}${linhaCrediario}`;
+      const extra = linhaParcelas + linhaPoint + linhaTaxa + linhaCrediario;
+      return `<div class="pag">
+        <div class="pag-head">
+          <div class="pag-nome">${iconeForma(pg.forma)}<span>${escapeHtml(rotuloForma(pg.forma))}</span></div>
+          <div class="campo-rs"><input class="pv" data-i="${i}" value="${valorCampo(pg.valor)}" inputmode="decimal" aria-label="Valor em ${escapeHtml(rotuloForma(pg.forma))}" ${travado}></div>
+          <button class="btn ghost so-ic sm prm" data-i="${i}" aria-label="Remover ${escapeHtml(rotuloForma(pg.forma))}" title="Remover" ${travado}>${icone("fechar", { tam: 16 })}</button>
+        </div>
+        ${extra ? `<div class="pag-extra">${extra}</div>` : ""}
+      </div>`;
     })
     .join("");
-  $("#pags")
-    .querySelectorAll(".pf")
-    .forEach(
-      (s) =>
-        (s.onchange = () => {
-          const pg = pagamentos[+s.dataset.i];
-          pg.forma = s.value;
-          pg.parcelas = 1;
-          renderPags();
-          renderTotais();
-        })
-    );
   $("#pags")
     .querySelectorAll(".pv")
     .forEach(
@@ -628,18 +706,32 @@ function agregarJuros(pagsComJuros) {
 function renderTotais() {
   const { subtotal, desconto, total, pago } = calc();
   const r = resumoTotais({ total, pago, pagamentos: pagamentosComJuros(pagamentos) });
-  const notaTotal = r.mostrarOriginal
-    ? ` <small class="totais-nota">a cobrar do cliente${r.estimadoCobranca ? " (estimado)" : ""}</small>`
-    : "";
+  $("#sacola-sub").textContent = brl(subtotal);
+  $("#sacola-total").textContent = brl(total);
+  root.querySelectorAll(".forma-btn").forEach((b) => (b.disabled = !carrinho.length));
+
+  // Situacao do pagamento: o que a vendedora precisa saber de relance.
+  let status;
+  if (!carrinho.length) status = `<div class="status-pag falta">${icone("sacola", { tam: 18 })}<span>Adicione produtos pra começar</span></div>`;
+  else if (!pagamentos.length) status = `<div class="status-pag falta">${icone("cartao", { tam: 18 })}<span>Escolha a forma de pagamento</span></div>`;
+  else if (r.falta > 0) status = `<div class="status-pag falta">${icone("aviso", { tam: 18 })}<span>Falta distribuir</span><span class="num">${brl(r.falta)}</span></div>`;
+  else if (r.falta < 0) status = `<div class="status-pag troco">${icone("dinheiro", { tam: 18 })}<span>Troco</span><span class="num">${brl(-r.falta)}</span></div>`;
+  else status = `<div class="status-pag ok">${icone("sucesso", { tam: 18 })}<span>Pagamento completo</span></div>`;
+  const pct = total > 0 ? Math.min(100, Math.max(0, (pago / total) * 100)) : 0;
+
   $("#totais").innerHTML = `
-    <div class="totais"><span>Subtotal</span><span>${brl(subtotal)}</span></div>
-    <div class="totais"><span>Desconto</span><span>- ${brl(desconto)}</span></div>
-    <div class="totais big"><span>Total${notaTotal}</span><span>${brl(r.totalCobrado)}</span></div>
-    ${r.mostrarOriginal ? `<div class="totais"><span>Valor original</span><span>${brl(r.valorOriginal)}</span></div>` : ""}
-    ${r.mostrarReceber ? `<div class="totais"><span>Custo da loja (maquininha/financiamento)</span><span>- ${brl(r.custoLojaTotal)}</span></div>` : ""}
-    ${r.mostrarReceber ? `<div class="totais"><span>Valor a receber${r.estimadoReceber ? " (estimado)" : ""}</span><span>${brl(r.valorAReceber)}</span></div>` : ""}
+    <div class="r-total">
+      <span class="r-rot">${r.mostrarOriginal ? `Total a cobrar${r.estimadoCobranca ? " <span class='opc'>(estimado)</span>" : ""}` : "Total"}</span>
+      <span class="r-val">${brl(r.totalCobrado)}</span>
+    </div>
+    <div class="progresso ${carrinho.length && r.falta <= 0 && pagamentos.length ? "completo" : ""}" aria-hidden="true"><span style="width:${pct}%"></span></div>
+    ${status}
     <div class="totais"><span>Pago</span><span>${brl(r.pagoCobrado)}</span></div>
-    <div class="totais"><span>${r.falta > 0 ? "Falta" : r.falta < 0 ? "Troco" : "&mdash;"}</span><span>${brl(Math.abs(r.falta))}</span></div>`;
+    ${desconto ? `<div class="totais"><span>Desconto</span><span>- ${brl(desconto)}</span></div>` : ""}
+    ${r.mostrarOriginal ? `<div class="totais"><span>Valor original</span><span>${brl(r.valorOriginal)}</span></div>` : ""}
+    ${r.mostrarReceber ? `<div class="totais"><span>Custo da loja (maquininha)</span><span>- ${brl(r.custoLojaTotal)}</span></div>` : ""}
+    ${r.mostrarReceber ? `<div class="totais"><span>A loja recebe${r.estimadoReceber ? " (estimado)" : ""}</span><span>${brl(r.valorAReceber)}</span></div>` : ""}
+    <div style="height:12px"></div>`;
 }
 
 // Zera a tela (sem perguntar nada). Usado depois de vender e pelo "Limpar".
@@ -652,7 +744,7 @@ function resetarVenda() {
   $("#cliente-perfil").value = "";
   aplicarClientePerfil();
   if ($("#indicador")) $("#indicador").value = "";
-  $("#desconto").value = "0";
+  $("#desconto").value = "0,00";
   renderResultados();
   renderCart();
   renderPags();
@@ -706,34 +798,41 @@ async function limpar() {
 }
 
 async function finalizar() {
-  if (!carrinho.length) return toast("Carrinho vazio.", "warn");
-  if (!$("#cliente").value.trim()) return toast("Informe o nome do cliente.", "err");
-  if (!$("#cliente-contato").value.trim()) return toast("Informe o contato do cliente.", "err");
+  // Erro de preenchimento: avisa e leva o cursor pro campo.
+  const erroEm = (sel, msg) => {
+    toast(msg, "err");
+    $(sel)?.focus();
+  };
+  if (!carrinho.length) return erroEm("#bipar", "A sacola está vazia. Bipe ou procure um produto.");
+  if (!$("#cliente").value.trim()) return erroEm("#cliente", "Falta o nome do cliente.");
+  if (!$("#cliente-contato").value.trim()) return erroEm("#cliente-contato", "Falta o contato do cliente (telefone ou WhatsApp).");
   const { subtotal, desconto, total, pago } = calc();
-  if (total < 0) return toast("Desconto maior que o subtotal.", "err");
+  if (total < 0) return erroEm("#desconto", "O desconto é maior que o subtotal da sacola.");
+  if (!pagamentos.length) return toast("Escolha a forma de pagamento.", "err");
   if (round2(pago) !== total)
-    return toast(`Os valores das formas de pagamento somam ${brl(pago)}, mas o valor original da venda e ${brl(total)}.`, "err");
+    return toast(`As formas de pagamento somam ${brl(pago)}, mas a venda é de ${brl(total)}. Ajuste os valores.`, "err");
   const clientePerfil = clienteSelecionado();
   const linhasCrediario = pagamentos.filter((p) => p.forma === "crediario" && p.valor > 0);
   if (linhasCrediario.length && !clientePerfil)
-    return toast("Venda no crediario precisa de um cliente cadastrado (selecione ou use \"+ Novo\").", "err");
+    return erroEm("#cliente-perfil", "Venda no crediário precisa de um cliente cadastrado. Escolha na lista ou toque em \"Novo\".");
   for (const p of linhasCrediario) {
     if ((p.entrada || 0) > dividaDoCrediario(pagamentosComJuros([p])[0]))
-      return toast("O valor de parcela paga e maior que o valor no crediario.", "err");
+      return toast("O valor de parcela paga é maior que o valor no crediário.", "err");
   }
   const temDinheiro = pagamentos.some((p) => p.forma === "dinheiro" && p.valor > 0)
     || linhasCrediario.some((p) => (p.entrada || 0) > 0 && formaEntradaDe(p) === "dinheiro");
   if (temDinheiro && !caixaAbertoId)
-    return toast("Abra o caixa para receber em dinheiro.", "err");
+    return toast("Abra o caixa antes de receber em dinheiro (tela Caixa).", "err");
   if (pagamentos.some((p) => p.point && p.point.status !== "processed"))
-    return toast("Ha cobranca em andamento na maquininha. Conclua ou cancele antes de finalizar.", "warn");
+    return toast("Há cobrança em andamento na maquininha. Conclua ou cancele antes de finalizar.", "warn");
   // Com a exigencia ligada, cartao so entra na venda se passou pela maquininha
   // (senao da pra registrar "credito" sem cobrar nada).
   if (pointObrigatorio && pagamentos.some((p) => TIPO_POINT[p.forma] && p.valor > 0 && p.point?.status !== "processed"))
-    return toast("Credito e debito precisam ser cobrados na maquininha (botao \"Cobrar na maquininha\").", "err");
+    return toast("Crédito e débito precisam ser cobrados na maquininha (botão \"Cobrar na maquininha\").", "err");
 
   const btn = $("#finalizar");
   btn.disabled = true;
+  btn.classList.add("carregando");
   try {
     const itensVenda = carrinho.map((l) => ({
       produtoId: l.produtoId,
@@ -854,7 +953,7 @@ async function finalizar() {
       return prox;
     });
 
-    toast(`Venda #${numero} registrada.`, "ok");
+    toast(`Venda #${numero} registrada. Recibo aberto em outra janela.`, "ok");
     recibo({ numero, itens: itensVenda, subtotal, desconto, total, totalComJuros, pagamentos: pagamentosSalvos, cliente, clienteContato, observacoes });
     if (clientePerfil && crediarioValor > 0) {
       clientePerfil.total_compras = round2((clientePerfil.total_compras || 0) + crediarioValor);
@@ -872,6 +971,7 @@ async function finalizar() {
     toast(e?.message || "Falha ao registrar venda.", "err");
   } finally {
     btn.disabled = false;
+    btn.classList.remove("carregando");
   }
 }
 

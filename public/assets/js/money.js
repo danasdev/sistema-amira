@@ -11,3 +11,6 @@ export function parseNum(v) {
   if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
   return Number(s.replace(/[^\d.\-]/g, "")) || 0;
 }
+
+// Valor pra preencher um <input> no formato brasileiro: 419.7 -> "419,70".
+export const valorCampo = (n) => (Number(n) || 0).toFixed(2).replace(".", ",");
