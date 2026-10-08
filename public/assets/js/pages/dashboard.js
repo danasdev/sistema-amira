@@ -1,5 +1,6 @@
 import { requireAuth } from "../auth.js";
-import { initShell, escapeHtml, fmtData, erroCard } from "../ui.js";
+import { initShell, escapeHtml, fmtData, erroCard, tituloCard, vazio } from "../ui.js";
+import { icone } from "../icons.js";
 import {
   db, collection, query, where, orderBy, getDocs, Timestamp,
   inicioDoDia, inicioDoMes, periodoParaIntervalo, getConfigIndicadores,
@@ -52,8 +53,6 @@ const totalHoje = vendasHoje.reduce((s, v) => s + (v.total || 0), 0);
 const qtdHoje = vendasHoje.length;
 const ticket = qtdHoje ? totalHoje / qtdHoje : 0;
 
-const porCanal = {};
-vendasHoje.forEach((v) => (porCanal[v.canal] = (porCanal[v.canal] || 0) + (v.total || 0)));
 
 // ---- caixa aberto (unico pra loja toda, nao "do usuario") ----
 const caixaDoc = (await getDocs(query(
@@ -70,9 +69,9 @@ const comissaoMes = vendasMes
   .filter((v) => v.canal === "loja")
   .reduce((s, v) => s + (v.comissao?.valor || 0), 0);
 
-// ---- top produtos hoje ----
+// ---- mais vendidos do mes (por quantidade) ----
 const prod = {};
-vendasHoje.forEach((v) =>
+vendasMes.forEach((v) =>
   (v.itens || []).forEach((it) => {
     // Catalogo do site nao tem `sku`; agrupa pelo produtoId (fallbacks p/ legado).
     const chave = it.produtoId || it.codigoBarras || it.sku || it.nome || "?";
@@ -81,63 +80,113 @@ vendasHoje.forEach((v) =>
     p.total += it.subtotal || 0;
   })
 );
-const top = Object.values(prod).sort((a, b) => b.qtd - a.qtd).slice(0, 5);
+const top = Object.values(prod).sort((a, b) => b.qtd - a.qtd).slice(0, 6);
+
+// ---- faturamento por dia do mes (grafico de colunas) ----
+const agoraD = new Date();
+const diasNoMes = new Date(agoraD.getFullYear(), agoraD.getMonth() + 1, 0).getDate();
+const porDia = Array.from({ length: diasNoMes }, () => ({ total: 0, qtd: 0 }));
+vendasMes.forEach((v) => {
+  const d = v.data?.toDate ? v.data.toDate() : null;
+  if (!d) return;
+  const x = porDia[d.getDate() - 1];
+  x.total += v.total || 0;
+  x.qtd++;
+});
+const maxDia = Math.max(0, ...porDia.map((x) => x.total));
+const hojeN = agoraD.getDate();
+const nomeMes = agoraD.toLocaleDateString("pt-BR", { month: "long" });
+
+// ---- formas de pagamento e canais no mes ----
+const FORMAS = { dinheiro: ["Dinheiro", "dinheiro"], pix: ["Pix", "pix"], debito: ["Débito", "debito"], credito: ["Crédito", "cartao"], crediario: ["Crediário", "crediario"] };
+const porForma = {};
+vendasMes.forEach((v) => (v.pagamentos || []).forEach((p) => (porForma[p.forma] = (porForma[p.forma] || 0) + (Number(p.valor) || 0))));
+const porCanalMes = {};
+vendasMes.forEach((v) => (porCanalMes[v.canal] = (porCanalMes[v.canal] || 0) + (v.total || 0)));
+
+// Barras horizontais de serie unica: rotulo, barra proporcional ao maior, valor em texto.
+function barras(linhas, { fmt = brl, sub } = {}) {
+  if (!linhas.length) return "";
+  const max = Math.max(...linhas.map((l) => l.valor)) || 1;
+  return `<div class="graf-barras">${linhas
+    .map((l) => `<div class="barra-linha" title="${escapeHtml(l.rotulo)}: ${fmt(l.valor)}">
+      <span class="b-rot">${l.ic ? icone(l.ic, { tam: 16 }) : ""}${escapeHtml(l.rotulo)}</span>
+      <span class="b-trilho"><span style="width:${Math.max(1, (l.valor / max) * 100)}%"></span></span>
+      <span class="b-val">${fmt(l.valor)}${sub ? `<small>${sub(l)}</small>` : ""}</span>
+    </div>`)
+    .join("")}</div>`;
+}
+
+const totalFormas = Object.values(porForma).reduce((s, v) => s + v, 0) || 1;
+const linhasFormas = Object.entries(porForma)
+  .sort((a, b) => b[1] - a[1])
+  .map(([f, v]) => ({ rotulo: FORMAS[f]?.[0] || f, ic: FORMAS[f]?.[1] || "cartao", valor: round2(v) }));
+const linhasCanais = Object.entries(porCanalMes)
+  .sort((a, b) => b[1] - a[1])
+  .map(([c, v]) => ({ rotulo: CANAIS[c] || c, valor: round2(v) }));
+const marcasEixo = new Set([1, 5, 10, 15, 20, 25, diasNoMes]);
 
 root.innerHTML = `
-  <div class="grid cols-6">
-    <div class="card kpi"><div class="l">Vendas hoje</div><div class="n">${qtdHoje}</div></div>
-    <div class="card kpi"><div class="l">Vendas no mes</div><div class="n">${qtdMes}</div></div>
-    <div class="card kpi"><div class="l">Faturamento hoje</div><div class="n">${brl(totalHoje)}</div></div>
-    <div class="card kpi"><div class="l">Faturamento no mes</div><div class="n">${brl(totalMes)}</div></div>
-    <div class="card kpi"><div class="l">Ticket medio</div><div class="n">${brl(ticket)}</div></div>
-    <div class="card kpi"><div class="l">${ehAdm ? "Comissoes no mes" : "Minha comissao no mes"}</div><div class="n">${brl(comissaoMes)}</div></div>
+  <div class="grid cols-4">
+    <div class="card kpi"><div class="l">${icone("tendencia", { tam: 16 })}Faturamento hoje</div><div class="n">${brl(totalHoje)}</div><div class="d">${qtdHoje} venda${qtdHoje === 1 ? "" : "s"}</div></div>
+    <div class="card kpi"><div class="l">${icone("calendario", { tam: 16 })}Faturamento no mês</div><div class="n">${brl(totalMes)}</div><div class="d">${qtdMes} venda${qtdMes === 1 ? "" : "s"} em ${nomeMes}</div></div>
+    <div class="card kpi"><div class="l">${icone("sacola", { tam: 16 })}Ticket médio hoje</div><div class="n">${brl(ticket)}</div><div class="d">valor médio por venda</div></div>
+    <div class="card kpi"><div class="l">${icone("comissoes", { tam: 16 })}${ehAdm ? "Comissões no mês" : "Minha comissão no mês"}</div><div class="n">${brl(comissaoMes)}</div><div class="d">vendas da loja</div></div>
   </div>
 
-  <div class="card">
-    <strong>Caixa</strong>
-    <p class="${caixa ? "" : "muted"}">${
-      caixa
-        ? `Aberto em ${fmtData(caixa.aberto_em)} por ${escapeHtml(caixa.aberto_por_nome || "-")} &middot; abertura ${brl(caixa.valor_abertura)}`
-        : "Nenhum caixa aberto. Abra o caixa antes de vender em dinheiro."
-    }</p>
-    <a class="btn sec" href="/caixa">Ir para o caixa</a>
+  <div class="card" style="margin-top:var(--s-5)">
+    ${tituloCard("grafico", `Faturamento por dia — ${nomeMes}`, `<a class="btn ghost" href="/vendas">${icone("vendas", { tam: 16 })}Ver vendas</a>`)}
+    ${
+      maxDia > 0
+        ? `<p class="muted" style="margin:-6px 0 6px">Maior dia: <strong>${brl(maxDia)}</strong> &middot; hoje em dourado &middot; passe o mouse numa coluna pra ver o valor</p>
+      <div class="graf-colunas" role="img" aria-label="Faturamento diário de ${nomeMes}">
+        ${porDia
+          .map((x, i) => {
+            const h = maxDia ? (x.total / maxDia) * 100 : 0;
+            const cls = [i + 1 === hojeN ? "hoje" : "", x.total ? "" : "zero"].join(" ");
+            return `<div class="col ${cls}"><span style="height:${x.total ? Math.max(2, h) : 1}%"></span>
+              <div class="dica-graf">${i + 1}/${agoraD.getMonth() + 1} &middot; ${brl(x.total)} &middot; ${x.qtd} venda${x.qtd === 1 ? "" : "s"}</div></div>`;
+          })
+          .join("")}
+      </div>
+      <div class="graf-eixo">${porDia.map((_, i) => `<span>${marcasEixo.has(i + 1) ? i + 1 : ""}</span>`).join("")}</div>`
+        : vazio("grafico", "Ainda não há vendas neste mês", "As colunas aparecem conforme as vendas forem registradas no PDV.")
+    }
   </div>
 
-  <div class="card">
-    <strong>Vendas de hoje por canal</strong>
-    <table><tbody>
+  <div class="grid auto">
+    <div class="card">
+      ${tituloCard("cartao", "Formas de pagamento no mês")}
+      ${barras(linhasFormas, { sub: (l) => `${Math.round((l.valor / totalFormas) * 100)}% do total` }) || vazio("cartao", "Sem pagamentos ainda")}
+    </div>
+    <div class="card">
+      ${tituloCard("caixa", "Caixa")}
       ${
-        Object.entries(porCanal)
-          .map(([c, v]) => `<tr><td>${CANAIS[c] || c}</td><td class="right">${brl(v)}</td></tr>`)
-          .join("") || `<tr><td class="muted">Sem vendas hoje.</td></tr>`
+        caixa
+          ? `<div class="faixa ok">${icone("sucesso", { tam: 16 })}<div><strong>Caixa aberto</strong> desde ${fmtData(caixa.aberto_em)} por ${escapeHtml(caixa.aberto_por_nome || "-")}. Abertura: ${brl(caixa.valor_abertura)}.</div></div>`
+          : `<div class="faixa">${icone("aviso", { tam: 16 })}<div><strong>Nenhum caixa aberto.</strong> Abra o caixa antes de vender em dinheiro.</div></div>`
       }
-    </tbody></table>
+      <a class="btn sec" href="/caixa" style="margin-top:12px">${icone("caixa", { tam: 16 })}${caixa ? "Conferir o caixa" : "Abrir o caixa"}</a>
+      <div style="margin-top:18px">${tituloCard("pedidos", "Canais no mês")}</div>
+      ${barras(linhasCanais) || `<p class="muted">Sem vendas no mês.</p>`}
+    </div>
   </div>
 
   <div class="card">
-    <strong>Top produtos hoje</strong>
-    <div class="tabela-wrap"><table>
-      <thead><tr><th>Produto</th><th class="right">Qtd</th><th class="right">Total</th></tr></thead>
-      <tbody>
-        ${
-          top
-            .map((p) => `<tr><td>${escapeHtml(p.nome)}</td><td class="right">${p.qtd}</td><td class="right">${brl(p.total)}</td></tr>`)
-            .join("") || `<tr><td class="muted">-</td></tr>`
-        }
-      </tbody>
-    </table></div>
+    ${tituloCard("estrela", `Mais vendidos em ${nomeMes}`)}
+    ${barras(top.map((p) => ({ rotulo: p.nome, valor: p.qtd, total: p.total })), { fmt: (n) => `${n} un.`, sub: (l) => brl(l.total) }) || vazio("produtos", "Nenhum produto vendido ainda", "O ranking aparece com as primeiras vendas do mês.")}
   </div>
 
   ${
     ehAdm
       ? `<div class="card">
-    <strong>Contabilidade mensal</strong>
-    <p class="muted">Junta loja + site: receita bruta, resultado do parcelamento (juros cobrados do cliente menos custo da maquininha), gastos, comissoes de vendedor e de indicador, e o valor liquido do mes. Independente do Caixa — soma direto de vendas e gastos por data, nao de sessoes de caixa.</p>
-    <div class="row" style="align-items:end">
-      <div><label>Periodo</label><input type="month" id="periodo-contab" value="${periodoAtual}"></div>
-      <div style="flex:0 0 auto"><button class="btn ghost" id="ver-contab">Ver</button></div>
+    ${tituloCard("cofre", "Contabilidade mensal")}
+    <p class="muted">Loja + site: receita bruta, resultado do parcelamento (juros do cliente menos custo da maquininha), gastos, comissões e o valor líquido do mês. Soma direto de vendas e gastos por data, não das sessões de caixa.</p>
+    <div class="row" style="align-items:end;max-width:420px">
+      <div><label for="periodo-contab">Mês</label><input type="month" id="periodo-contab" value="${periodoAtual}"></div>
+      <div style="flex:0 0 auto"><button class="btn ghost" id="ver-contab">Ver mês</button></div>
     </div>
-    <div id="contab" style="margin-top:10px">Carregando...</div>
+    <div id="contab" style="margin-top:14px;max-width:560px">Carregando...</div>
   </div>`
       : ""
   }`;

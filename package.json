@@ -8,10 +8,12 @@
   "scripts": {
     "api:dev": "node scripts/api-dev.mjs",
     "point:check": "node scripts/point-check.mjs",
-    "test":"node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"tests/**/*.test.js\" \"tests/**/*.test.mjs\""
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"tests/**/*.test.js\" \"tests/**/*.test.mjs\""
   },
   "dependencies": {
+    "firebase": "^13.0.0",
     "firebase-admin": "^14.3.0",
+    "firebase-tools": "^15.33.0",
     "jsonwebtoken": "^9.0.2"
   }
 }
