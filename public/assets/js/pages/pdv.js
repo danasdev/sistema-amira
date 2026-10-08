@@ -3,7 +3,7 @@ import { auth } from "../firebase.js";
 import { initShell, toast, confirmar, escapeHtml, erroCard } from "../ui.js";
 import {
   db, collection, getDocs, query, where,
-  doc, runTransaction, serverTimestamp, getConfigSistema,
+  doc, runTransaction, serverTimestamp, getConfigSistema, increment,
 } from "../db.js";
 import { brl, round2, parseNum } from "../money.js";
 import { calcularComissao } from "../regras.js";
@@ -15,6 +15,8 @@ import {
   configPointEfetiva, storageSeguro, desativarTesteLocal, totalDaCobranca,
 } from "../point.js";
 import { cobrarNaMaquininha } from "../point-ui.js";
+import { dividaDoCrediario } from "../crediario.js";
+import { editarCliente, listarClientes } from "../clientes.js";
 
 const { perfil } = await requireAuth();
 const root = initShell({ perfil, active: "pdv" });
@@ -66,6 +68,14 @@ const indicadores = await getDocs(collection(db, "indicadores"))
     .sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR")))
   .catch(() => []);
 
+// Clientes cadastrados (pagina Clientes). Crediario EXIGE um deles: a
+// divida fica no perfil do cliente. Nas outras formas e opcional (so liga a
+// compra ao historico do cliente).
+let clientes = await listarClientes().catch(() => []);
+// Formas em que o cliente pode pagar a parcela na hora do crediario.
+const formasEntrada = formas.filter((f) => f !== "crediario");
+const formaEntradaDe = (p) => p.entrada_forma || (formasEntrada.includes("dinheiro") ? "dinheiro" : formasEntrada[0]);
+
 // preco de venda (varejo, com desconto do site aplicado); estoque e um so
 // pool (nao ha mais divisao varejo/atacado)
 const precoDe = (p) => infoPreco(p, "varejo").precoFinal;
@@ -92,6 +102,11 @@ root.innerHTML = `
     </div>
     <div class="card">
       <strong>Venda</strong>
+      <label>Cliente cadastrado <span class="muted" style="text-transform:none">(obrigatorio no crediario)</span></label>
+      <div class="row" style="flex-wrap:nowrap">
+        <select id="cliente-perfil"></select>
+        <button class="btn ghost" id="novo-cliente" style="flex:0 0 auto">+ Novo</button>
+      </div>
       <label>Cliente</label><input id="cliente" placeholder="Nome do cliente" required>
       <label>Contato</label><input id="cliente-contato" placeholder="Telefone / WhatsApp" required>
       ${indicadores.length ? `
@@ -133,6 +148,16 @@ $("#add-pag").onclick = () => {
   renderTotais();
 };
 $("#limpar").onclick = limpar;
+$("#cliente-perfil").onchange = aplicarClientePerfil;
+$("#novo-cliente").onclick = () =>
+  editarCliente(null, {
+    perfil,
+    onSalvo: (c) => {
+      clientes = [...clientes, c].sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR"));
+      renderClientes(c.id);
+      aplicarClientePerfil();
+    },
+  });
 $("#finalizar").onclick = finalizar;
 if (pointCfg.testeLocal) {
   $("#pt-local-off").onclick = () => {
@@ -141,10 +166,32 @@ if (pointCfg.testeLocal) {
   };
 }
 
+renderClientes("");
 renderResultados();
 renderCart();
 renderPags();
 renderTotais();
+
+function clienteSelecionado() {
+  return clientes.find((c) => c.id === $("#cliente-perfil").value) || null;
+}
+
+function renderClientes(selecionado) {
+  $("#cliente-perfil").innerHTML =
+    `<option value="">Sem cadastro</option>` +
+    clientes
+      .map((c) => `<option value="${escapeHtml(c.id)}" ${c.id === selecionado ? "selected" : ""}>${escapeHtml(c.nome)}${c.contato ? ` (${escapeHtml(c.contato)})` : ""}</option>`)
+      .join("");
+}
+
+// Cliente cadastrado preenche (e trava) nome e contato da venda.
+function aplicarClientePerfil() {
+  const c = clienteSelecionado();
+  $("#cliente").value = c ? c.nome || "" : "";
+  $("#cliente-contato").value = c ? c.contato || "" : "";
+  $("#cliente").readOnly = !!c;
+  $("#cliente-contato").readOnly = !!c;
+}
 
 // Recarregar/fechar a aba com cobranca na maquininha em curso (ou ja
 // aprovada e ainda sem venda) perderia o vinculo: o cliente pagou, o
@@ -320,13 +367,30 @@ function renderPags() {
           </div>`;
         }
       }
+      // Crediario: o cliente pode pagar uma parte na hora — so ESSE valor
+      // entra no caixa; o resto fica como divida no perfil do cliente.
+      let linhaCrediario = "";
+      if (pg.forma === "crediario") {
+        const divida = dividaDoCrediario(pagamentosComJuros([pg])[0]);
+        const entrada = Math.min(pg.entrada || 0, divida);
+        linhaCrediario = `
+          <div class="cart-line" style="align-items:end">
+            <div style="flex:1"><label style="margin-top:0">Valor de parcela paga</label>
+              <input class="pent" data-i="${i}" value="${pg.entrada || 0}" inputmode="decimal"></div>
+            <div style="flex:1"><label style="margin-top:0">Pago em</label>
+              <select class="pentf" data-i="${i}">${formasEntrada
+                .map((f) => `<option ${f === formaEntradaDe(pg) ? "selected" : ""}>${f}</option>`)
+                .join("")}</select></div>
+          </div>
+          <p class="muted" style="margin:2px 0 8px;font-size:12px">Vai pro caixa: ${brl(entrada)} &middot; fica devendo: <strong>${brl(round2(divida - entrada))}</strong></p>`;
+      }
       return `<div class="cart-line">
         <select data-i="${i}" class="pf" ${travado}>${formas
           .map((f) => `<option ${f === pg.forma ? "selected" : ""}>${f}</option>`)
           .join("")}</select>
         <input class="pv" data-i="${i}" value="${pg.valor}" inputmode="decimal" style="width:120px" ${travado}>
         <button class="btn ghost prm" data-i="${i}" ${travado}>&times;</button>
-      </div>${linhaParcelas}${linhaPoint}${linhaTaxa}`;
+      </div>${linhaParcelas}${linhaPoint}${linhaTaxa}${linhaCrediario}`;
     })
     .join("");
   $("#pags")
@@ -361,6 +425,19 @@ function renderPags() {
           renderTotais();
         })
     );
+  $("#pags")
+    .querySelectorAll(".pent")
+    .forEach(
+      (inp) =>
+        (inp.onchange = () => {
+          pagamentos[+inp.dataset.i].entrada = Math.max(0, round2(parseNum(inp.value)));
+          renderPags();
+          renderTotais();
+        })
+    );
+  $("#pags")
+    .querySelectorAll(".pentf")
+    .forEach((s) => (s.onchange = () => (pagamentos[+s.dataset.i].entrada_forma = s.value)));
   $("#pags")
     .querySelectorAll(".prm")
     .forEach((b) => {
@@ -498,28 +575,43 @@ function infoPagamento(p) {
 // credito/debito a vista com taxa de maquininha). Usada tanto no preview
 // (renderTotais) quanto ao finalizar, pra nunca divergir do que e salvo.
 function pagamentosComJuros(pags) {
-  return pags.map((p) => {
-    // Pago na maquininha: valem os numeros que ela informou (custo real,
-    // valor cobrado, parcelas); o que faltar cai na estimativa da tabela.
-    if (p.point?.status === "processed") {
-      const est = infoPagamento({ ...p, parcelas: p.point.parcelas ?? p.parcelas });
-      return pagamentoDaMaquininha(p, est, FORMAS_PARCELAVEIS.has(p.forma));
-    }
-    const valor = round2(p.valor);
-    const base = { forma: p.forma, valor };
-    if (!FORMAS_JUROS.includes(p.forma)) return base;
-    const { parcelas, pctCliente, pctLoja, valorComJuros, custoLoja, valorLiquido, valorParcela } = infoPagamento(p);
-    if (!pctCliente && !pctLoja) return base;
-    return {
-      ...base,
-      ...(FORMAS_PARCELAVEIS.has(p.forma) && parcelas > 1 ? { parcelas, valor_parcela: valorParcela } : {}),
-      juros_pct: pctCliente,
-      pct_loja: pctLoja,
-      valor_com_juros: valorComJuros,
-      custo_loja: custoLoja,
-      valor_liquido: valorLiquido,
-    };
-  });
+  return pags.map((p) => comCrediario(p, pagamentoComJuros(p)));
+}
+
+// Linha de crediario guarda quanto o cliente pagou na hora (`entrada`, em
+// `entrada_forma`) e quanto ficou devendo (`saldo_devedor`).
+function comCrediario(p, salvo) {
+  if (p.forma !== "crediario") return salvo;
+  const divida = dividaDoCrediario(salvo);
+  const entrada = Math.min(Math.max(0, round2(p.entrada || 0)), divida);
+  return { ...salvo, entrada, entrada_forma: formaEntradaDe(p), saldo_devedor: round2(divida - entrada) };
+}
+
+function pagamentoComJuros(p) {
+  // Pago na maquininha: valem os numeros que ela informou (custo real,
+  // valor cobrado, parcelas); o que faltar cai na estimativa da tabela.
+  if (p.point?.status === "processed") {
+    const est = infoPagamento({ ...p, parcelas: p.point.parcelas ?? p.parcelas });
+    return pagamentoDaMaquininha(p, est, FORMAS_PARCELAVEIS.has(p.forma));
+  }
+  const valor = round2(p.valor);
+  const base = { forma: p.forma, valor };
+  if (!FORMAS_JUROS.includes(p.forma)) return base;
+  const { parcelas, pctCliente, pctLoja, valorComJuros, custoLoja, valorLiquido, valorParcela } = infoPagamento(p);
+  // Parcelas sao gravadas mesmo sem taxa: o Caixa precisa delas pra contar
+  // so uma parcela do credito (../crediario.js).
+  const comParcelas = FORMAS_PARCELAVEIS.has(p.forma) && parcelas > 1
+    ? { ...base, parcelas, valor_parcela: valorParcela }
+    : base;
+  if (!pctCliente && !pctLoja) return comParcelas;
+  return {
+    ...comParcelas,
+    juros_pct: pctCliente,
+    pct_loja: pctLoja,
+    valor_com_juros: valorComJuros,
+    custo_loja: custoLoja,
+    valor_liquido: valorLiquido,
+  };
 }
 
 function agregarJuros(pagsComJuros) {
@@ -557,6 +649,8 @@ function resetarVenda() {
   $("#cliente").value = "";
   $("#cliente-contato").value = "";
   $("#observacoes").value = "";
+  $("#cliente-perfil").value = "";
+  aplicarClientePerfil();
   if ($("#indicador")) $("#indicador").value = "";
   $("#desconto").value = "0";
   renderResultados();
@@ -619,7 +713,16 @@ async function finalizar() {
   if (total < 0) return toast("Desconto maior que o subtotal.", "err");
   if (round2(pago) !== total)
     return toast(`Os valores das formas de pagamento somam ${brl(pago)}, mas o valor original da venda e ${brl(total)}.`, "err");
-  const temDinheiro = pagamentos.some((p) => p.forma === "dinheiro" && p.valor > 0);
+  const clientePerfil = clienteSelecionado();
+  const linhasCrediario = pagamentos.filter((p) => p.forma === "crediario" && p.valor > 0);
+  if (linhasCrediario.length && !clientePerfil)
+    return toast("Venda no crediario precisa de um cliente cadastrado (selecione ou use \"+ Novo\").", "err");
+  for (const p of linhasCrediario) {
+    if ((p.entrada || 0) > dividaDoCrediario(pagamentosComJuros([p])[0]))
+      return toast("O valor de parcela paga e maior que o valor no crediario.", "err");
+  }
+  const temDinheiro = pagamentos.some((p) => p.forma === "dinheiro" && p.valor > 0)
+    || linhasCrediario.some((p) => (p.entrada || 0) > 0 && formaEntradaDe(p) === "dinheiro");
   if (temDinheiro && !caixaAbertoId)
     return toast("Abra o caixa para receber em dinheiro.", "err");
   if (pagamentos.some((p) => p.point && p.point.status !== "processed"))
@@ -655,10 +758,32 @@ async function finalizar() {
     const pagamentosSalvos = pagamentosComJuros(pagamentos);
     const { totalComJuros, custoLojaTotal, valorLiquido } = agregarJuros(pagamentosSalvos);
 
+    // Crediario: a divida inteira vai pro perfil do cliente e o que ele pagou
+    // na hora vira um doc em `crediario_pagamentos` (e isso que o Caixa soma).
+    const crediarioSalvo = pagamentosSalvos.filter((p) => p.forma === "crediario");
+    const crediarioValor = round2(crediarioSalvo.reduce((s, p) => s + dividaDoCrediario(p), 0));
+    const crediarioEntrada = round2(crediarioSalvo.reduce((s, p) => s + (p.entrada || 0), 0));
+    const entradas = crediarioSalvo
+      .filter((p) => p.entrada > 0)
+      .map((p) => ({ ref: doc(collection(db, "crediario_pagamentos")), valor: p.entrada, forma: p.entrada_forma }));
+    const vendaRef = doc(collection(db, "vendas"));
+    const camposCliente = clientePerfil
+      ? {
+          cliente_id: clientePerfil.id,
+          ...(crediarioValor > 0
+            ? { crediario_valor: crediarioValor, crediario_entrada: crediarioEntrada, crediario_pagamento_ids: entradas.map((e) => e.ref.id) }
+            : {}),
+        }
+      : {};
+
     const numero = await runTransaction(db, async (t) => {
       const contRef = doc(db, "contadores", "vendas");
       const contSnap = await t.get(contRef);
       const prox = (contSnap.exists() ? contSnap.data().ultimo_numero || 0 : 0) + 1;
+
+      const clienteRef = clientePerfil ? doc(db, "clientes", clientePerfil.id) : null;
+      if (clienteRef && !(await t.get(clienteRef)).exists())
+        throw new Error("Cliente nao encontrado (foi excluido?). Recarregue a pagina.");
 
       const estoques = [];
       for (const it of itensVenda) {
@@ -679,7 +804,30 @@ async function finalizar() {
           atualizadoEm: serverTimestamp(),
         })
       );
-      t.set(doc(collection(db, "vendas")), {
+      if (clienteRef) {
+        t.update(clienteRef, {
+          ...(crediarioValor > 0 ? { total_compras: increment(crediarioValor), total_pago: increment(crediarioEntrada) } : {}),
+          ultima_compra_em: serverTimestamp(),
+          atualizado_em: serverTimestamp(),
+        });
+      }
+      entradas.forEach((e) =>
+        t.set(e.ref, {
+          cliente_id: clientePerfil.id,
+          cliente_nome: clientePerfil.nome || "",
+          valor: e.valor,
+          forma: e.forma,
+          origem: "pdv",
+          venda_id: vendaRef.id,
+          venda_numero: prox,
+          caixa_id: caixaAbertoId || null,
+          data: serverTimestamp(),
+          registrado_por_uid: perfil.id,
+          registrado_por_nome: perfil.nome || "",
+          status: "ok",
+        })
+      );
+      t.set(vendaRef, {
         numero: prox,
         canal: "loja",
         data: serverTimestamp(),
@@ -690,6 +838,7 @@ async function finalizar() {
         cliente_contato: clienteContato,
         observacoes,
         ...camposIndicador,
+        ...camposCliente,
         itens: itensVenda,
         subtotal,
         desconto,
@@ -707,6 +856,10 @@ async function finalizar() {
 
     toast(`Venda #${numero} registrada.`, "ok");
     recibo({ numero, itens: itensVenda, subtotal, desconto, total, totalComJuros, pagamentos: pagamentosSalvos, cliente, clienteContato, observacoes });
+    if (clientePerfil && crediarioValor > 0) {
+      clientePerfil.total_compras = round2((clientePerfil.total_compras || 0) + crediarioValor);
+      clientePerfil.total_pago = round2((clientePerfil.total_pago || 0) + crediarioEntrada);
+    }
 
     // atualiza estoque em memoria
     itensVenda.forEach((it) => {
@@ -751,6 +904,14 @@ function recibo(v) {
       .map(
         (p) =>
           `<div style="display:flex;justify-content:space-between"><span>${p.forma}${p.parcelas > 1 ? ` (${p.parcelas}x de ${brl(p.valor_parcela)})` : ""}</span><span>${brl(p.valor_com_juros ?? p.valor)}</span></div>`
+      )
+      .join("")}
+    ${v.pagamentos
+      .filter((p) => p.forma === "crediario")
+      .map(
+        (p) =>
+          `<div style="display:flex;justify-content:space-between"><span>Pago agora (${p.entrada_forma})</span><span>${brl(p.entrada)}</span></div>
+           <div style="display:flex;justify-content:space-between;font-weight:700"><span>Fica no crediario</span><span>${brl(p.saldo_devedor)}</span></div>`
       )
       .join("")}
     <hr>

@@ -6,6 +6,7 @@ import {
   inicioDoDia,
 } from "../db.js";
 import { brl, round2, parseNum } from "../money.js";
+import { resumoCaixa } from "../crediario.js";
 
 // Gastos sao soltos por data (nao amarrados a um caixa_id) — aqui so
 // mostramos um resumo somente-leitura, pro staff ver o que ja foi lancado
@@ -113,18 +114,27 @@ async function renderBody() {
     .map((d) => d.data())
     .filter((v) => v.status === "concluida");
 
+  // Recebimentos do crediario nesta sessao: o que o cliente pagou na hora
+  // da venda (PDV) e os pagamentos lancados depois em Clientes.
+  const recebimentos = (await getDocs(query(
+    collection(db, "crediario_pagamentos"),
+    where("caixa_id", "==", caixa.id)
+  ))).docs
+    .map((d) => d.data())
+    .filter((r) => r.status !== "estornado");
+
   const gastosSessao = await gastosDoPeriodo(caixa.aberto_em, Timestamp.now());
 
-  const porForma = {};
-  vendas.forEach((v) =>
-    (v.pagamentos || []).forEach((p) => (porForma[p.forma] = round2((porForma[p.forma] || 0) + p.valor)))
-  );
+  // Parcelado nao entra inteiro: credito entra com UMA parcela e crediario
+  // so com o que foi pago (ver ../crediario.js).
+  const { porForma, recebidoCrediario, totalRecebido, creditoAReceber, crediarioFiado } =
+    resumoCaixa({ vendas, recebimentos });
   const movs = caixa.movimentos || [];
   const sangrias = round2(movs.filter((m) => m.tipo === "sangria").reduce((s, m) => s + m.valor, 0));
   const suprimentos = round2(movs.filter((m) => m.tipo === "suprimento").reduce((s, m) => s + m.valor, 0));
-  const totalVendas = round2(Object.values(porForma).reduce((s, v) => s + v, 0));
+  const totalVendas = totalRecebido;
   const esperadoDinheiro = round2(
-    caixa.valor_abertura + (porForma.dinheiro || 0) + suprimentos - sangrias
+    caixa.valor_abertura + (porForma.dinheiro || 0) + (recebidoCrediario.dinheiro || 0) + suprimentos - sangrias
   );
 
   // "Valor liquido do caixa": vendido de TABELA (valor original, sem juros
@@ -151,18 +161,25 @@ async function renderBody() {
       <p class="muted">Aberto em ${fmtData(caixa.aberto_em)} por ${escapeHtml(caixa.aberto_por_nome || "-")} &middot; abertura ${brl(caixa.valor_abertura)}</p>
       <div class="grid cols-3">
         <div class="kpi"><div class="l">Vendas no caixa</div><div class="n">${vendas.length}</div></div>
-        <div class="kpi"><div class="l">Total vendido</div><div class="n">${brl(totalVendas)}</div></div>
+        <div class="kpi"><div class="l">Total recebido</div><div class="n">${brl(totalVendas)}</div></div>
         <div class="kpi"><div class="l">Dinheiro esperado</div><div class="n">${brl(esperadoDinheiro)}</div></div>
       </div>
       <table style="margin-top:12px"><tbody>
         ${
           Object.entries(porForma)
-            .map(([f, v]) => `<tr><td>${f}</td><td class="right">${brl(v)}</td></tr>`)
+            .map(([f, v]) => `<tr><td>${f === "credito" ? "credito (parcela do mes)" : f}</td><td class="right">${brl(v)}</td></tr>`)
             .join("") || `<tr><td class="muted">Sem vendas ainda.</td></tr>`
         }
+        ${Object.entries(recebidoCrediario)
+          .map(([f, v]) => `<tr><td>crediario recebido (${f})</td><td class="right">${brl(v)}</td></tr>`)
+          .join("")}
         <tr><td>Suprimentos</td><td class="right">${brl(suprimentos)}</td></tr>
         <tr><td>Sangrias</td><td class="right">- ${brl(sangrias)}</td></tr>
       </tbody></table>
+      ${creditoAReceber || crediarioFiado ? `<p class="muted" style="margin-top:8px">Fora do caixa desta sessao:
+        ${creditoAReceber ? `credito parcelado a receber nos proximos meses <strong>${brl(creditoAReceber)}</strong>` : ""}
+        ${creditoAReceber && crediarioFiado ? " &middot; " : ""}
+        ${crediarioFiado ? `crediario em aberto <strong>${brl(crediarioFiado)}</strong> (ver <a href="/clientes">Clientes</a>)` : ""}</p>` : ""}
       <div class="row" style="margin-top:12px">
         <button class="btn ghost" id="btn-sup">Suprimento</button>
         <button class="btn ghost" id="btn-san">Sangria</button>
@@ -209,7 +226,7 @@ async function renderBody() {
   document.getElementById("btn-san").onclick = () => movimento("sangria", caixa.id);
   document.getElementById("btn-fechar").onclick = () =>
     fechar(caixa, esperadoDinheiro, {
-      porForma, totalVendas, sangrias, suprimentos,
+      porForma, recebidoCrediario, creditoAReceber, crediarioFiado, totalVendas, sangrias, suprimentos,
       valorLiquidoCaixa, custoLojaSessao, gastosSessaoTotal, jurosClienteSessao,
     });
 }
@@ -291,6 +308,9 @@ function fechar(caixa, esperadoDinheiro, parcial) {
         valor_fechamento_informado: informado,
         resumo: {
           por_forma: parcial.porForma,
+          recebido_crediario: parcial.recebidoCrediario,
+          credito_a_receber: parcial.creditoAReceber,
+          crediario_fiado: parcial.crediarioFiado,
           total_vendas: parcial.totalVendas,
           sangrias: parcial.sangrias,
           suprimentos: parcial.suprimentos,

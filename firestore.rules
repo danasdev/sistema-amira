@@ -611,6 +611,46 @@ service cloud.firestore {
       allow create, update, delete: if ehAdmin();
     }
 
+    // ── clientes/{id} ──────────────────────────────────────────────────
+    // Clientes do CREDIARIO da loja fisica (pagina Clientes / PDV). NAO e o
+    // cliente do site (esse fica em `usuarios`). Acumula a divida:
+    // total_compras (vendido no crediario) e total_pago (pagamentos validos),
+    // mexidos com increment() na mesma transacao da venda/pagamento. Qualquer
+    // staff cadastra e vende/recebe; vendedor nunca DIMINUI os totais (so
+    // admin: cancelar venda e estornar pagamento). Excluir: so admin.
+    match /clientes/{id} {
+      allow read: if ehStaff();
+      allow create: if ehStaff()
+        && request.resource.data.nome is string
+        && request.resource.data.nome.size() >= 1
+        && request.resource.data.nome.size() <= 120
+        && request.resource.data.total_compras == 0
+        && request.resource.data.total_pago == 0;
+      allow update: if ehAdmin()
+        || (ehVendedor()
+            && request.resource.data.total_compras is number
+            && request.resource.data.total_pago is number
+            && request.resource.data.total_compras >= resource.data.total_compras
+            && request.resource.data.total_pago >= resource.data.total_pago);
+      allow delete: if ehAdmin();
+    }
+
+    // ── crediario_pagamentos/{id} ─────────────────────────────────────
+    // Dinheiro recebido do crediario: o pago na hora da venda (origem 'pdv')
+    // e os pagamentos lancados em Clientes (origem 'lancamento'). O Caixa
+    // soma estes docs pelo caixa_id. Estorno (status 'estornado') so admin.
+    match /crediario_pagamentos/{id} {
+      allow read: if ehStaff();
+      allow create: if ehStaff()
+        && request.resource.data.registrado_por_uid == request.auth.uid
+        && request.resource.data.cliente_id is string
+        && request.resource.data.valor is number
+        && request.resource.data.valor > 0
+        && request.resource.data.status == 'ok';
+      allow update: if ehAdmin();
+      allow delete: if false;
+    }
+
     // ── gastos/{id} ────────────────────────────────────────────────────
     // Despesas da loja (aluguel, fornecedor, salario, etc.) — SOLTAS por
     // data, nao amarradas a uma sessao de caixa (da pra lancar sem caixa

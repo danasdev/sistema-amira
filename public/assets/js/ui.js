@@ -7,6 +7,7 @@ const NAV = [
   ["gastos", "Gastos", "/gastos", true],
   ["produtos", "Produtos", "/produtos", true],
   ["vendas", "Vendas", "/vendas"],
+  ["clientes", "Clientes", "/clientes"],
   ["pedidos", "Pedidos", "/pedidos"],
   ["comissoes", "Comissoes", "/comissoes"],
   ["indicadores", "Indicadores", "/indicadores", true],

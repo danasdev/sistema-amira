@@ -3,7 +3,7 @@ import { auth } from "../firebase.js";
 import { initShell, toast, modal, confirmar, escapeHtml, fmtData, erroCard } from "../ui.js";
 import {
   db, collection, getDocs, query, where, orderBy, limit,
-  doc, runTransaction, serverTimestamp, getConfigSistema,
+  doc, runTransaction, serverTimestamp, getConfigSistema, increment,
 } from "../db.js";
 import { brl, round2 } from "../money.js";
 import { derivarItensPedido, contaComoPago } from "../produtos-schema.js";
@@ -170,6 +170,7 @@ function detalhe(v) {
         : ""
     }
     ${v.observacoes ? `<p class="muted">Obs: ${escapeHtml(v.observacoes)}</p>` : ""}
+    ${v.crediario_valor ? `<p class="muted">Crediario: ${brl(v.crediario_valor)} &middot; pago na hora ${brl(v.crediario_entrada || 0)} &middot; ficou devendo ${brl(round2(v.crediario_valor - (v.crediario_entrada || 0)))} (<a href="/clientes">Clientes</a>)</p>` : ""}
     ${v.ref ? `<p class="muted">Indicador: ${escapeHtml(v.indicador_nome || "-")} (<code>${escapeHtml(String(v.ref))}</code>)</p>` : ""}
     ${
       v.canal === "site" && v.status === "concluida"
@@ -214,7 +215,10 @@ function detalhe(v) {
           const aviso = noCartao.length
             ? ` Isso tambem ESTORNA ${brl(noCartao.reduce((s, p) => s + (p.valor_com_juros ?? p.valor), 0))} no cartao do cliente (maquininha).`
             : "";
-          if (!(await confirmar(`Cancelar esta venda? O estoque dos itens sera devolvido.${aviso}`)))
+          const avisoCrediario = v.crediario_valor
+            ? ` A divida de ${brl(v.crediario_valor)} sai do cliente e o pago na hora (${brl(v.crediario_entrada || 0)}) e estornado.`
+            : "";
+          if (!(await confirmar(`Cancelar esta venda? O estoque dos itens sera devolvido.${aviso}${avisoCrediario}`)))
             return false;
           await cancelar(v);
           toast("Venda cancelada.", "ok");
@@ -245,12 +249,29 @@ async function cancelar(v) {
     const refs = (v.itens || []).map((it) => doc(db, "produtos", it.produtoId));
     const snaps = [];
     for (const r of refs) snaps.push(await t.get(r));
+    // Crediario: tira a divida do cliente e estorna o que ele pagou na hora.
+    const clienteRef = v.cliente_id && v.crediario_valor ? doc(db, "clientes", v.cliente_id) : null;
+    const clienteExiste = clienteRef ? (await t.get(clienteRef)).exists() : false;
 
     t.update(vRef, {
       status: "cancelada",
       cancelada_em: serverTimestamp(),
       cancelada_por: perfil.id,
     });
+    if (clienteExiste) {
+      t.update(clienteRef, {
+        total_compras: increment(-v.crediario_valor),
+        total_pago: increment(-(v.crediario_entrada || 0)),
+        atualizado_em: serverTimestamp(),
+      });
+    }
+    (v.crediario_pagamento_ids || []).forEach((id) =>
+      t.update(doc(db, "crediario_pagamentos", id), {
+        status: "estornado",
+        estornado_em: serverTimestamp(),
+        estornado_por_uid: perfil.id,
+      })
+    );
     snaps.forEach((s, i) => {
       if (!s.exists()) return;
       const atual = s.data().estoque ?? 0;
